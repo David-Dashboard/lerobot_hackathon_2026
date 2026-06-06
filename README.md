@@ -114,6 +114,30 @@ The dashboard loads even without a token — the Qualia panel just shows
 "no token" instead of erroring. Finetuning happens on Qualia's GPUs, so it works
 regardless of your local hardware.
 
+## Full workflow — no hardware needed
+
+A teammate can walk the **entire pipeline from the dashboard** using the mock arm:
+
+```powershell
+git clone https://github.com/David-Dashboard/lerobot_hackathon_2026.git
+cd lerobot_hackathon_2026
+uv venv --python 3.11; .\.venv\Scripts\activate
+uv pip install -r requirements.txt
+python serve.py --mock        # open http://localhost:8000/
+```
+
+In the dashboard, top to bottom:
+1. **Arm** — sliders read/command the (mock) arm.
+2. **Gather data → dataset** — set task + episodes, click **Record**. A real
+   LeRobotDataset (state + action + synthetic camera) is created under `recorded/`,
+   and the repo id auto-fills the finetune panel. Tick "push to Hugging Face" to upload.
+3. **Finetune · Qualia** — click **Launch finetune** to start a real VLA job on
+   Qualia (uses the dataset from step 2).
+4. **Deploy** — pick `sine` and click **Run**; the mock arm moves autonomously and
+   you see panel 1 react. Swap in a trained model path to run a real policy.
+
+Swap `--mock` for `--port COM3` and the same dashboard drives the real SO-101.
+
 ## Quick start
 
 - **Windows** → see **[RUNBOOK.md](RUNBOOK.md)**

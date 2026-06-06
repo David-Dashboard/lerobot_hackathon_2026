@@ -8,6 +8,7 @@ __pycache__/
 outputs/
 data/
 datasets/
+recorded/
 checkpoints/
 wandb/
 *.rrd

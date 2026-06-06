@@ -12,29 +12,35 @@
   header h1 { font-size:18px; margin:0; }
   .dot { width:10px; height:10px; border-radius:50%; background:var(--mut); display:inline-block; }
   .dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
-  .wrap { max-width:980px; margin:0 auto; padding:24px; display:grid; gap:24px; grid-template-columns:1fr 1fr; }
-  @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
+  .steps { margin-left:auto; color:var(--mut); font-size:13px; }
+  .wrap { max-width:1040px; margin:0 auto; padding:24px; display:grid; gap:20px; grid-template-columns:1fr 1fr; }
+  @media (max-width:860px){ .wrap{ grid-template-columns:1fr; } }
   .card { background:var(--card); border:1px solid #2a3148; border-radius:12px; padding:20px; }
-  .card h2 { margin:0 0 14px; font-size:15px; letter-spacing:.3px; text-transform:uppercase; color:var(--mut); }
-  .joint { display:grid; grid-template-columns:120px 1fr 64px; align-items:center; gap:10px; margin:8px 0; }
+  .card h2 { margin:0 0 14px; font-size:14px; letter-spacing:.4px; text-transform:uppercase; color:var(--mut); }
+  .card h2 .n { color:var(--acc); margin-right:6px; }
+  .joint { display:grid; grid-template-columns:120px 1fr 56px; align-items:center; gap:10px; margin:6px 0; }
   .joint label { color:var(--mut); font-size:13px; }
   .joint output { text-align:right; font-variant-numeric:tabular-nums; }
   input[type=range]{ width:100%; accent-color:var(--acc); }
   input[type=text], input[type=number], select {
     width:100%; background:#0f1320; color:var(--ink); border:1px solid #2a3148; border-radius:8px; padding:8px 10px; }
-  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .field { margin:8px 0; } .field label { display:block; color:var(--mut); font-size:12px; margin-bottom:4px; }
   button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; }
   button.ghost { background:transparent; border:1px solid #2a3148; color:var(--ink); }
   button:disabled { opacity:.5; cursor:not-allowed; }
-  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
   .muted { color:var(--mut); font-size:13px; }
   .pill { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid #2a3148; color:var(--mut); }
-  .msg { font-size:13px; margin-top:8px; min-height:18px; }
+  .msg { font-size:13px; min-height:18px; }
   .msg.ok{ color:var(--ok);} .msg.bad{ color:var(--bad);} .msg.warn{ color:var(--warn);}
+  .prog { height:6px; background:#0f1320; border-radius:99px; overflow:hidden; margin-top:8px; }
+  .prog > div { height:100%; width:0; background:var(--acc); transition:width .2s; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #2a3148; }
   code { background:#0f1320; padding:1px 5px; border-radius:5px; }
+  label.ck { display:flex; gap:8px; align-items:center; color:var(--mut); font-size:13px; }
 </style>
 </head>
 <body>
@@ -42,134 +48,150 @@
   <span id="hdot" class="dot"></span>
   <h1>SO-101 Control</h1>
   <span id="hmode" class="pill">…</span>
+  <span id="jobline" class="steps"></span>
 </header>
 
 <div class="wrap">
-  <!-- ARM -->
+  <!-- 1. ARM -->
   <section class="card">
-    <h2>Arm</h2>
+    <h2><span class="n">1</span>Arm</h2>
     <div id="joints"></div>
-    <div class="bar" style="margin-top:12px">
+    <div class="bar">
       <button id="send">Send to arm</button>
       <button id="zero" class="ghost">Zero all</button>
       <span id="armMsg" class="msg"></span>
     </div>
-    <p class="muted">Live values poll <code>/joints</code>; “Send” POSTs your slider targets. Safe against the mock.</p>
   </section>
 
-  <!-- QUALIA -->
+  <!-- 2. DATA -->
   <section class="card">
-    <h2>Finetune · Qualia</h2>
+    <h2><span class="n">2</span>Gather data → dataset</h2>
+    <div class="field"><label>Dataset repo id</label><input id="repo" type="text" value="local/so101_demo" /></div>
+    <div class="field"><label>Task</label><input id="task" type="text" value="pick up the cube and place it in the bowl" /></div>
+    <div class="row3">
+      <div class="field"><label>Episodes</label><input id="eps" type="number" value="3" /></div>
+      <div class="field"><label>Steps/ep</label><input id="steps" type="number" value="30" /></div>
+      <div class="field"><label>FPS</label><input id="fps" type="number" value="30" /></div>
+    </div>
+    <label class="ck"><input id="push" type="checkbox" /> push to Hugging Face</label>
+    <div class="prog"><div id="recBar"></div></div>
+    <div class="bar"><button id="record">Record</button><span id="recMsg" class="msg"></span></div>
+  </section>
+
+  <!-- 3. FINETUNE -->
+  <section class="card">
+    <h2><span class="n">3</span>Finetune · Qualia</h2>
     <div class="bar"><span class="muted">Credits:</span> <b id="credits">…</b> <span id="qcfg" class="pill"></span></div>
-    <div class="field"><label>Dataset (HF repo id)</label>
-      <input id="dataset" type="text" value="lerobot/svla_so101_pickplace" /></div>
+    <div class="field"><label>Dataset (HF repo id)</label><input id="dataset" type="text" value="lerobot/svla_so101_pickplace" /></div>
     <div class="row">
       <div class="field"><label>VLA type</label>
         <select id="vla">
-          <option value="smolvla">smolvla</option>
-          <option value="act">act</option>
-          <option value="pi0">pi0</option>
-          <option value="pi05">pi05</option>
-          <option value="groot">groot</option>
-          <option value="sarm">sarm</option>
+          <option>smolvla</option><option>act</option><option>pi0</option>
+          <option>pi05</option><option>groot</option><option>sarm</option>
         </select></div>
       <div class="field"><label>Hours</label><input id="hours" type="number" step="0.5" value="2" /></div>
     </div>
-    <div class="field"><label>Base model id (optional)</label>
-      <input id="model" type="text" value="lerobot/smolvla_base" /></div>
-    <div class="row">
-      <div class="field"><label>Camera key (in dataset)</label><input id="camKey" type="text" placeholder="observation.images.front" /></div>
-      <div class="field"><label>Maps to</label><input id="camName" type="text" placeholder="cam_1" /></div>
-    </div>
+    <div class="field"><label>Base model id (optional)</label><input id="model" type="text" value="lerobot/smolvla_base" /></div>
     <div class="bar">
       <button id="launch">Launch finetune</button>
-      <button id="refreshJobs" class="ghost">Refresh jobs</button>
+      <button id="refreshJobs" class="ghost">Refresh</button>
       <span id="qMsg" class="msg"></span>
     </div>
-    <table id="jobs" style="margin-top:12px"><thead><tr><th>job</th><th>status</th><th>phase</th></tr></thead><tbody></tbody></table>
+    <table id="qjobs" style="margin-top:10px"><thead><tr><th>job</th><th>status</th><th>phase</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <!-- 4. DEPLOY -->
+  <section class="card">
+    <h2><span class="n">4</span>Deploy (run policy on arm)</h2>
+    <div class="row">
+      <div class="field"><label>Policy</label>
+        <select id="policy"><option value="sine">sine (demo)</option><option value="hold">hold</option><option value="__path">trained model path…</option></select></div>
+      <div class="field"><label>Steps</label><input id="dsteps" type="number" value="300" /></div>
+    </div>
+    <div class="field" id="pathWrap" style="display:none"><label>Model path / HF repo</label><input id="ppath" type="text" placeholder="davidbaofu/act_so101" /></div>
+    <div class="prog"><div id="depBar"></div></div>
+    <div class="bar"><button id="run">Run</button><button id="stop" class="ghost">Stop</button><span id="depMsg" class="msg"></span></div>
+    <p class="muted">With the mock arm, “sine” makes it move autonomously — watch panel 1 react.</p>
   </section>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const JOINTS = ["shoulder_pan","shoulder_lift","elbow_flex","wrist_flex","wrist_roll","gripper"];
+const setMsg=(sel,t,cls)=>{const el=$(sel);el.textContent=t||"";el.className="msg "+(cls||"");};
+const jget=async u=>(await fetch(u)).json();
+const jpost=async(u,b)=>(await fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b||{})})).json();
 
-// ---- Arm ----
-function buildJoints() {
-  const box = $("#joints"); box.innerHTML = "";
-  for (const j of JOINTS) {
-    const row = document.createElement("div"); row.className = "joint";
-    row.innerHTML = `<label>${j}</label>
-      <input type="range" min="-100" max="100" step="0.5" value="0" id="r_${j}" />
-      <output id="o_${j}">0.0</output>`;
+// ---- 1. Arm ----
+function buildJoints(){ const box=$("#joints"); box.innerHTML="";
+  for(const j of JOINTS){ const row=document.createElement("div"); row.className="joint";
+    row.innerHTML=`<label>${j}</label><input type="range" min="-100" max="100" step="0.5" value="0" id="r_${j}"/><output id="o_${j}">0.0</output>`;
     box.appendChild(row);
-    row.querySelector("input").addEventListener("input", e => { $("#o_"+j).textContent = (+e.target.value).toFixed(1); e.target.dataset.touched="1"; });
-  }
-}
-async function pollArm() {
-  try {
-    const h = await (await fetch("/health")).json();
-    $("#hdot").className = "dot " + (h.connected ? "on":"off");
-    const r = await (await fetch("/joints")).json();
-    for (const [j,v] of Object.entries(r.positions||{})) {
-      const slider = $("#r_"+j); if (!slider) continue;
-      $("#o_"+j).textContent = (+v).toFixed(1);
-      if (slider.dataset.touched !== "1") slider.value = v;   // follow live until user grabs it
-    }
-  } catch(e){ $("#hdot").className = "dot off"; }
-}
-$("#send").onclick = async () => {
-  const positions = {}; for (const j of JOINTS) positions[j] = +$("#r_"+j).value;
-  setMsg("#armMsg", "sending…");
-  try { const r = await (await fetch("/joints",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({positions})})).json();
-    setMsg("#armMsg", r.ok ? "sent ✓" : "error", r.ok?"ok":"bad");
-  } catch(e){ setMsg("#armMsg","error: "+e,"bad"); }
+    row.querySelector("input").addEventListener("input",e=>{$("#o_"+j).textContent=(+e.target.value).toFixed(1);e.target.dataset.touched="1";});
+  } }
+async function pollArm(){ try{
+  const h=await jget("/health"); $("#hdot").className="dot "+(h.connected?"on":"off");
+  const r=await jget("/joints");
+  for(const[j,v]of Object.entries(r.positions||{})){ const s=$("#r_"+j); if(!s)continue;
+    $("#o_"+j).textContent=(+v).toFixed(1); if(s.dataset.touched!=="1") s.value=v; }
+}catch(e){ $("#hdot").className="dot off"; } }
+$("#send").onclick=async()=>{ const positions={}; for(const j of JOINTS)positions[j]=+$("#r_"+j).value;
+  setMsg("#armMsg","sending…"); try{ const r=await jpost("/joints",{positions}); setMsg("#armMsg",r.ok?"sent ✓":"error",r.ok?"ok":"bad"); }catch(e){ setMsg("#armMsg","error","bad"); } };
+$("#zero").onclick=()=>{ for(const j of JOINTS){const s=$("#r_"+j);s.value=0;s.dataset.touched="1";$("#o_"+j).textContent="0.0";} };
+
+// ---- 2. Record ----
+$("#record").onclick=async()=>{
+  const body={repo_id:$("#repo").value.trim(),task:$("#task").value.trim(),
+    num_episodes:+$("#eps").value,episode_steps:+$("#steps").value,fps:+$("#fps").value,push_to_hub:$("#push").checked};
+  setMsg("#recMsg","starting…"); const r=await jpost("/record",body);
+  if(!r.ok) setMsg("#recMsg",r.error||"busy","bad");
 };
-$("#zero").onclick = () => { for (const j of JOINTS){ const s=$("#r_"+j); s.value=0; s.dataset.touched="1"; $("#o_"+j).textContent="0.0"; } };
 
-// ---- Qualia ----
-async function loadCredits() {
-  const r = await (await fetch("/qualia/credits")).json();
-  if (r.ok) { $("#credits").textContent = (r.data.balance ?? JSON.stringify(r.data)); $("#qcfg").textContent="connected"; }
-  else { $("#credits").textContent = "—"; $("#qcfg").textContent = r.configured===false ? "no token" : "error"; setMsg("#qMsg", r.error, "warn"); }
-}
-async function loadJobs() {
-  const r = await (await fetch("/qualia/jobs")).json();
-  const tb = $("#jobs tbody"); tb.innerHTML = "";
-  if (!r.ok) return;
-  for (const j of r.data) {
-    const id = (j.job_id||j.id||"").toString().slice(0,8);
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td><code>${id}</code></td><td>${j.status||"-"}</td><td>${j.current_phase||j.phase||"-"}</td>`;
-    tb.appendChild(tr);
+// ---- 3. Qualia ----
+async function loadCredits(){ const r=await jget("/qualia/credits");
+  if(r.ok){ $("#credits").textContent=r.data.balance??JSON.stringify(r.data); $("#qcfg").textContent="connected"; }
+  else { $("#credits").textContent="—"; $("#qcfg").textContent=r.configured===false?"no token":"error"; } }
+async function loadQJobs(){ const r=await jget("/qualia/jobs"); const tb=$("#qjobs tbody"); tb.innerHTML="";
+  if(!r.ok)return; for(const j of r.data){ const id=(j.job_id||j.id||"").toString().slice(0,8);
+    const tr=document.createElement("tr"); tr.innerHTML=`<td><code>${id}</code></td><td>${j.status||"-"}</td><td>${j.current_phase||j.phase||"-"}</td>`; tb.appendChild(tr); } }
+$("#launch").onclick=async()=>{ const dataset_id=$("#dataset").value.trim();
+  if(!dataset_id)return setMsg("#qMsg","dataset required","bad");
+  if(!confirm(`Launch a REAL Qualia finetune?\n\ndataset: ${dataset_id}\nvla: ${$("#vla").value}, hours: ${$("#hours").value}\n\nThis spends credits.`))return;
+  const body={dataset_id,vla_type:$("#vla").value,hours:+$("#hours").value,model_id:$("#model").value.trim()||null};
+  setMsg("#qMsg","launching…"); $("#launch").disabled=true;
+  try{ const r=await jpost("/qualia/finetune",body);
+    setMsg("#qMsg", r.ok?("launched ✓ "+(r.data.job_id||"").slice(0,8)):r.error, r.ok?"ok":"bad"); loadQJobs(); loadCredits();
+  }finally{ $("#launch").disabled=false; } };
+$("#refreshJobs").onclick=loadQJobs;
+
+// ---- 4. Deploy ----
+$("#policy").onchange=e=>{ $("#pathWrap").style.display = e.target.value==="__path"?"block":"none"; };
+$("#run").onclick=async()=>{ let policy=$("#policy").value; if(policy==="__path")policy=$("#ppath").value.trim()||"hold";
+  setMsg("#depMsg","starting…"); const r=await jpost("/deploy",{policy,steps:+$("#dsteps").value});
+  if(!r.ok) setMsg("#depMsg",r.error||"busy","bad"); };
+$("#stop").onclick=async()=>{ await jpost("/job/stop",{}); setMsg("#depMsg","stopping…","warn"); };
+
+// ---- shared job poller ----
+async function pollJob(){ try{
+  const j=await jget("/job"); const pct=j.total?Math.round((j.done??j.step??0)/j.total*100):0;
+  if(j.kind==="record"){ $("#recBar").style.width=pct+"%";
+    if(j.running) setMsg("#recMsg",`recording ${j.done||0}/${j.total||"?"}`,"");
+    else if(j.error) setMsg("#recMsg",j.error,"bad");
+    else if(j.summary){ $("#recBar").style.width="100%"; setMsg("#recMsg",`dataset ✓ ${j.summary.num_frames} frames → ${j.summary.repo_id}`,"ok"); $("#dataset").value=j.summary.repo_id; }
   }
-}
-$("#launch").onclick = async () => {
-  const dataset_id = $("#dataset").value.trim();
-  if (!dataset_id) return setMsg("#qMsg","dataset required","bad");
-  if (!confirm(`Launch a REAL Qualia finetune?\n\ndataset: ${dataset_id}\nvla: ${$("#vla").value}\nhours: ${$("#hours").value}\n\nThis spends credits.`)) return;
-  const body = { dataset_id, vla_type:$("#vla").value, hours:+$("#hours").value, model_id:$("#model").value.trim()||null };
-  const ck=$("#camKey").value.trim(), cn=$("#camName").value.trim();
-  if (ck && cn) body.camera_mappings = { [cn]: ck };
-  setMsg("#qMsg","launching…");
-  $("#launch").disabled = true;
-  try {
-    const r = await (await fetch("/qualia/finetune",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})).json();
-    if (r.ok) setMsg("#qMsg", "launched ✓ job "+(r.data.job_id||"").slice(0,8), "ok");
-    else setMsg("#qMsg", r.error, "bad");
-    loadJobs(); loadCredits();
-  } catch(e){ setMsg("#qMsg","error: "+e,"bad"); }
-  finally { $("#launch").disabled = false; }
-};
-$("#refreshJobs").onclick = loadJobs;
+  if(j.kind==="deploy"){ $("#depBar").style.width=pct+"%";
+    if(j.running) setMsg("#depMsg",`running ${j.step||0}/${j.total||"?"}`,"");
+    else if(j.error) setMsg("#depMsg",j.error,"bad");
+    else setMsg("#depMsg","done ✓","ok");
+  }
+  $("#jobline").textContent = j.running?`${j.kind}: ${j.done??j.step??0}/${j.total??"?"}`:"";
+}catch(e){} }
 
-function setMsg(sel,t,cls){ const el=$(sel); el.textContent=t||""; el.className="msg "+(cls||""); }
-
-// init
 buildJoints();
-fetch("/health").then(r=>r.json()).then(h=>{ $("#hmode").textContent = h.connected? "arm connected":"arm offline"; }).catch(()=>{ $("#hmode").textContent="server"; });
-pollArm(); setInterval(pollArm, 700);
-loadCredits(); loadJobs(); setInterval(loadJobs, 8000);
+jget("/health").then(h=>{$("#hmode").textContent=h.connected?"arm connected":"arm offline";}).catch(()=>{$("#hmode").textContent="server";});
+pollArm(); setInterval(pollArm,600);
+loadCredits(); loadQJobs(); setInterval(loadQJobs,8000);
+pollJob(); setInterval(pollJob,600);
 </script>
 </body>
 </html>

@@ -1,17 +1,19 @@
-"""HTTP API + dashboard UI for the SO-101.
+"""HTTP API + dashboard for the SO-101 -- the whole workflow in one server.
 
-`create_app(arm)` wires:
-  - arm routes:    GET /health, GET /joints, POST /joints   (works on any RobotArm)
-  - qualia routes: GET /qualia/{credits,models,jobs}, POST /qualia/finetune, ...
-  - the UI:        GET /  -> static dashboard
+`create_app(arm)` wires four concerns, all decoupled (none import each other):
+  - arm      : GET /health, GET /joints, POST /joints
+  - record   : POST /record  (gather data -> LeRobotDataset)         [background]
+  - deploy   : POST /deploy, POST /job/stop  (run a policy on the arm)[background]
+  - job      : GET /job  (status of the running record/deploy)
+  - qualia   : GET /qualia/{credits,models,jobs}, POST /qualia/finetune, status
+  - ui       : GET /  -> dashboard
 
-Qualia routes degrade gracefully (return ok:false + message) when no token /
-network, so the dashboard always loads. The arm and Qualia concerns stay
-independent -- neither imports the other.
+record + deploy share one background slot (one arm => one activity at a time).
 """
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,12 +21,29 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .interface import RobotArm
+from .jobs import BackgroundJob
 
 STATIC_DIR = Path(__file__).parent / "static"
+RECORD_ROOT = Path("recorded")
 
 
 class JointsBody(BaseModel):
     positions: dict[str, float]
+
+
+class RecordBody(BaseModel):
+    repo_id: str = "local/so101_demo"
+    task: str = "pick up the cube and place it in the bowl"
+    num_episodes: int = 2
+    episode_steps: int = 30
+    fps: int = 30
+    push_to_hub: bool = False
+
+
+class DeployBody(BaseModel):
+    policy: str = "sine"   # 'sine'/'hold' or a trained model path
+    steps: int = 300
+    fps: int = 30
 
 
 class FinetuneBody(BaseModel):
@@ -38,7 +57,8 @@ class FinetuneBody(BaseModel):
 
 
 def create_app(arm: RobotArm, *, enable_qualia: bool = True) -> FastAPI:
-    app = FastAPI(title="SO-101 Remote", version="0.2.0")
+    app = FastAPI(title="SO-101 Control", version="0.3.0")
+    job = BackgroundJob()
 
     # --- arm ---------------------------------------------------------------
     @app.get("/health")
@@ -53,6 +73,70 @@ def create_app(arm: RobotArm, *, enable_qualia: bool = True) -> FastAPI:
     def set_joints(body: JointsBody) -> dict:
         arm.write_joints(body.positions)
         return {"ok": True, "positions": body.positions}
+
+    # --- record (gather data -> dataset) -----------------------------------
+    @app.post("/record")
+    def record(body: RecordBody) -> dict:
+        from .record import record_dataset
+
+        root = RECORD_ROOT / body.repo_id.replace("/", "__")
+
+        def target(j: BackgroundJob):
+            shutil.rmtree(root, ignore_errors=True)  # allow re-record
+            j.info = {"done": 0, "total": body.num_episodes * body.episode_steps}
+
+            def progress(done, total):
+                j.info = {"done": done, "total": total}
+
+            summary = record_dataset(
+                arm,
+                repo_id=body.repo_id,
+                task=body.task,
+                num_episodes=body.num_episodes,
+                episode_steps=body.episode_steps,
+                fps=body.fps,
+                root=root,
+                push_to_hub=body.push_to_hub,
+                progress=progress,
+            )
+            j.info = {**j.info, "summary": summary}
+
+        try:
+            job.start("record", target)
+            return {"ok": True}
+        except RuntimeError as e:
+            return {"ok": False, "error": str(e)}
+
+    # --- deploy (run a policy on the arm) ----------------------------------
+    @app.post("/deploy")
+    def deploy(body: DeployBody) -> dict:
+        from .deploy import load_policy, run_policy
+
+        policy = load_policy(body.policy)
+
+        def target(j: BackgroundJob):
+            def on_step(done, total):
+                j.info = {"step": done, "total": total}
+
+            run_policy(
+                arm, policy, steps=body.steps, fps=body.fps,
+                should_stop=lambda: j.should_stop, on_step=on_step,
+            )
+
+        try:
+            job.start("deploy", target)
+            return {"ok": True}
+        except RuntimeError as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/job")
+    def job_status() -> dict:
+        return job.status()
+
+    @app.post("/job/stop")
+    def job_stop() -> dict:
+        job.request_stop()
+        return {"ok": True}
 
     # --- qualia ------------------------------------------------------------
     if enable_qualia:
@@ -70,17 +154,12 @@ def _add_qualia_routes(app: FastAPI) -> None:
     from . import qualia_client as q
 
     def safe(fn):
-        """Run a Qualia call, turning any failure into ok:false JSON (UI stays alive)."""
         try:
             return {"ok": True, "data": fn()}
         except q.QualiaNotConfigured as e:
-            return JSONResponse(
-                {"ok": False, "configured": False, "error": str(e)}, status_code=200
-            )
-        except Exception as e:  # noqa: BLE001 - surface message to the dashboard
-            return JSONResponse(
-                {"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=200
-            )
+            return JSONResponse({"ok": False, "configured": False, "error": str(e)}, status_code=200)
+        except Exception as e:  # noqa: BLE001 - surface to dashboard
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=200)
 
     @app.get("/qualia/credits")
     def qualia_credits():
