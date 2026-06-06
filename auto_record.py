@@ -30,17 +30,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-CORE_DEPS = {  # import name -> pip hint
-    "serial": "pyserial", "cv2": "opencv-python", "numpy": "numpy", "yaml": "pyyaml",
-    "depthai": "depthai", "pygrabber": "pygrabber", "lerobot": "lerobot[feetech]",
-}
-
-
 # --------------------------------------------------------------------------- #
 # dependency bootstrap (uv)
 # --------------------------------------------------------------------------- #
-def ensure_deps(install: bool, need_rerun: bool, need_hub: bool) -> None:
-    deps = dict(CORE_DEPS)
+def ensure_deps(install: bool, *, need_record: bool = True,
+                need_rerun: bool = False, need_hub: bool = False) -> None:
+    deps = {"yaml": "pyyaml", "lerobot": "lerobot[feetech]"}  # always
+    if need_record:  # arms + cameras
+        deps.update({
+            "serial": "pyserial", "cv2": "opencv-python", "numpy": "numpy",
+            "depthai": "depthai", "pygrabber": "pygrabber",
+        })
     if need_rerun:
         deps["rerun"] = "rerun-sdk"
     if need_hub:
@@ -182,10 +182,24 @@ def launch_qualia_act(dataset_id: str, recorded_cams: list[str], args) -> None:
         print(f"Qualia not available ({e}); skipping finetune. Dataset is on the Hub at {dataset_id}.")
         return
 
-    # camera_mappings: model camera slot -> dataset image key.
-    cam_map = {"image_top": "observation.images.scene"}
-    if "wrist" in recorded_cams:
-        cam_map["image_wrist"] = "observation.images.wrist"
+    # camera_mappings: model camera slot -> dataset image key. Prefer scene->image_top
+    # and wrist->image_wrist; any other cameras fill the remaining slots positionally.
+    slots = ["image_top", "image_wrist", "image_side"]
+    pref = {"scene": "image_top", "wrist": "image_wrist"}
+    cam_map, used, leftover = {}, set(), []
+    for name in recorded_cams:
+        slot = pref.get(name)
+        if slot and slot not in used:
+            cam_map[slot] = f"observation.images.{name}"
+            used.add(slot)
+        else:
+            leftover.append(name)
+    for name in leftover:
+        for slot in slots:
+            if slot not in used:
+                cam_map[slot] = f"observation.images.{name}"
+                used.add(slot)
+                break
 
     # Validate slot names against the live catalog so a renamed slot fails fast
     # (before spending) instead of erroring server-side.
@@ -220,6 +234,38 @@ def launch_qualia_act(dataset_id: str, recorded_cams: list[str], args) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# upload-only (no recording, no hardware)
+# --------------------------------------------------------------------------- #
+def upload_only(args) -> None:
+    """Push an EXISTING local dataset to the HF Hub (and optionally launch training)."""
+    from huggingface_hub import HfApi
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    root = Path(args.root) if args.root else REPO_ROOT / "recorded" / args.name
+    if not root.exists() or not any(root.iterdir()):
+        sys.exit(f"ERROR: no local dataset at {root}. Record it first, or pass --name/--root.")
+
+    try:
+        hf_user = args.hf_user or HfApi().whoami()["name"]
+    except Exception as e:
+        sys.exit(f"ERROR: not logged in to Hugging Face ({e}). Set HF_TOKEN or pass --hf-user.")
+    repo_id = f"{hf_user}/{args.name}"
+
+    print("== Upload dataset to the HF Hub ==")
+    print(f"  local : {root}")
+    print(f"  hub   : {repo_id}")
+    ds = LeRobotDataset(repo_id=repo_id, root=str(root))
+    img_keys = [k for k in ds.features if k.startswith("observation.images.")]
+    print(f"  {ds.num_episodes} episode(s), {ds.num_frames} frames, cameras: {img_keys}")
+    ds.push_to_hub()
+    print(f"Pushed: https://huggingface.co/datasets/{repo_id}")
+
+    if args.train:
+        cam_names = [k.rsplit(".", 1)[-1] for k in img_keys]
+        launch_qualia_act(repo_id, cam_names, args)
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 def main() -> None:
@@ -228,6 +274,7 @@ def main() -> None:
     ap.add_argument("--install", action="store_true", help="install missing deps via uv, then continue")
     ap.add_argument("--config", default=None, help="path to config.yaml (default: repo config.yaml)")
     ap.add_argument("--name", default="trash_pick", help="dataset name")
+    ap.add_argument("--root", default=None, help="dataset directory (default: recorded/<name>)")
     ap.add_argument("--task", default="pick up the trash and drop it in the bin")
     ap.add_argument("--episodes", type=int, default=40, help="max demos (manual mode: quit early with 'q')")
     ap.add_argument("--fps", type=int, default=30)
@@ -238,6 +285,7 @@ def main() -> None:
     ap.add_argument("--no-display", action="store_true", help="don't stream to Rerun")
     ap.add_argument("--overwrite", action="store_true", help="replace an existing dataset of the same name")
     # cloud
+    ap.add_argument("--upload-only", action="store_true", help="push an EXISTING local dataset (--name/--root) to the HF Hub and exit — no recording, no hardware")
     ap.add_argument("--push", action="store_true", help="push the dataset to the HF Hub")
     ap.add_argument("--train", action="store_true", help="push + launch a Qualia ACT finetune (spends credits)")
     ap.add_argument("--hf-user", default=None, help="HF namespace for the dataset (auto-detected if omitted)")
@@ -249,8 +297,15 @@ def main() -> None:
     # Put the venv's Scripts/bin dir on PATH so Rerun's viewer is found automatically.
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
 
+    # Upload-only: push an existing dataset and exit (no hardware, no camera/serial deps).
+    if args.upload_only:
+        ensure_deps(args.install, need_record=False, need_hub=True)
+        upload_only(args)
+        return
+
     push = args.push or args.train
-    ensure_deps(install=args.install, need_rerun=not args.no_display and not args.check, need_hub=push)
+    ensure_deps(args.install, need_record=True,
+                need_rerun=not args.no_display and not args.check, need_hub=push)
 
     import yaml
 
@@ -270,7 +325,7 @@ def main() -> None:
 
         hf_user = HfApi().whoami()["name"]
     repo_id = f"{hf_user}/{args.name}" if push else f"local/{args.name}"
-    root = REPO_ROOT / "recorded" / args.name
+    root = Path(args.root) if args.root else REPO_ROOT / "recorded" / args.name
 
     from coord_grasp.oak import OakCamera
     from so101 import make_arm, make_teleop
