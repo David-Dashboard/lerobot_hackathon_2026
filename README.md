@@ -21,5 +21,9 @@ The `.venv/` is git-ignored — recreate it with the commands above.
 
 ## Quick start
 
-See **[RUNBOOK.md](RUNBOOK.md)** for the end-to-end flow:
+- **Windows** → see **[RUNBOOK.md](RUNBOOK.md)**
+- **WSL2 / Linux** (hardware + calibration machine) → see **[SETUP_WSL2.md](SETUP_WSL2.md)**
+  ⚠️ WSL2 needs USB passthrough (`usbipd-win`) before the arm is visible — covered in step 3.
+
+Both cover the end-to-end flow:
 teleoperate → record dataset → push to Hugging Face → fine-tune a policy → run it on the arm.
