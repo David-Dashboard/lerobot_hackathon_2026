@@ -1,5 +1,7 @@
 # LeRobot Hackathon 2026 — SO-101
 
+[![CI](https://github.com/David-Dashboard/lerobot_hackathon_2026/actions/workflows/ci.yml/badge.svg)](https://github.com/David-Dashboard/lerobot_hackathon_2026/actions/workflows/ci.yml)
+
 Hello-world + workflow for talking to an SO-101 arm with [LeRobot](https://github.com/huggingface/lerobot) and visualizing with [Rerun](https://rerun.io).
 
 ## Setup

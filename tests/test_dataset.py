@@ -5,6 +5,8 @@ will load. It needs the dataset cached locally (we pulled it during the Rerun de
 or network access; otherwise it SKIPS rather than fails.
 """
 
+import os
+
 import pytest
 
 REPO_ID = "lerobot/svla_so101_pickplace"
@@ -12,6 +14,8 @@ REPO_ID = "lerobot/svla_so101_pickplace"
 
 @pytest.fixture(scope="module")
 def dataset():
+    if os.getenv("SKIP_DATASET_TESTS") == "1":
+        pytest.skip("dataset tests skipped (SKIP_DATASET_TESTS=1, e.g. in CI)")
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
