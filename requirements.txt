@@ -1,0 +1,9 @@
+# Runtime dependencies. Install into the venv with:
+#   uv pip install -r requirements.txt
+# (dev/test also needs: pytest)
+
+lerobot[feetech]      # robot control + Feetech motor SDK
+rerun-sdk             # visualization
+fastapi               # remote-control HTTP server
+uvicorn[standard]     # ASGI server to run it
+httpx                 # client (and FastAPI TestClient)
