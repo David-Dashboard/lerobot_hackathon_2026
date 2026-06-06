@@ -9,3 +9,9 @@ uvicorn[standard]     # ASGI server to run it
 httpx                 # client (and FastAPI TestClient)
 qualia-sdk            # VLA finetuning (Qualia)
 python-dotenv         # load tokens from .env
+
+# trash-arm pipeline
+transformers>=4.57.1,<5   # open-vocab perception (OWL-ViT). <5 keeps huggingface-hub
+                          # <1.0 so it stays compatible with lerobot 0.4.4 (do NOT bump to 5.x)
+pyyaml                # config.yaml
+opencv-python         # camera + homography (usually pulled in by lerobot too)

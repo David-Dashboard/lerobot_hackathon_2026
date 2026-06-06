@@ -1,0 +1,109 @@
+# Trash-arm Phase 1 configuration.
+#
+# Values marked  # TODO: MEASURE  are placeholders that need real numbers taken
+# from your physical setup before autonomous runs will work. Everything else is
+# either real (ports/serials, found by probing your machine) or a sane default
+# you can tune on hardware. Units: metres and degrees, robot base frame.
+#
+# COMMIT THIS FILE (and calibration/) so the whole team shares one setup.
+
+robot:                       # the follower: bolted to the table, does the picking
+  type: so101_follower
+  id: my_follower            # must match the lerobot-calibrate --robot.id you used
+  port: COM5                 # real (probed). If COM number drifts, match by serial:
+  serial: "5B41531706"       # stable board id (USB\VID_1A86&PID_55D3\5B41531706)
+
+teleop:                      # the leader: handheld, used only for data collection
+  type: so101_leader
+  id: my_leader              # must match the lerobot-calibrate --teleop.id you used
+  port: COM4                 # real (probed)
+  serial: "5B41531811"       # stable board id (USB\VID_1A86&PID_55D3\5B41531811)
+
+cameras:
+  # index = OS camera index. Confirm with scripts/test_perception.py --list.
+  scene:                     # fixed top-down view of the table
+    index: 0                 # TODO: CONFIRM which OS index is the scene cam
+    width: 640
+    height: 480
+    fps: 30
+  wrist:                     # rigidly mounted on the wrist (used later / optional now)
+    index: 2                 # TODO: CONFIRM which OS index is the wrist cam
+    width: 640
+    height: 480
+    fps: 30
+
+calibration:
+  # Built by scripts/calibrate_camera.py. Paths relative to repo root.
+  homography_path: calibration/homography_scene.npy
+  camera_matrix_path: calibration/camera_matrix.npy   # optional (undistortion)
+  dist_coeffs_path: calibration/dist_coeffs.npy        # optional (undistortion)
+
+workspace:                   # reachable table-plane area in the robot frame (metres)
+  x_min: 0.10                # TODO: MEASURE
+  x_max: 0.32                # TODO: MEASURE
+  y_min: -0.16               # TODO: MEASURE
+  y_max: 0.16                # TODO: MEASURE
+  z_table: 0.00              # table surface height in robot frame  # TODO: MEASURE
+  z_floor: 0.012             # hard floor: never command below this (collision guard)
+  z_approach: 0.09           # hover height above the table before descending
+  z_grasp: 0.010             # gripper-closes height above the table  # TODO: tune
+  z_lift: 0.12               # height to lift to after grasping
+
+bin:
+  xy: [0.04, 0.20]           # drop location in robot frame  # TODO: MEASURE
+  z_release: 0.14            # height to open the gripper over the bin
+
+home:                        # safe rest pose (joint degrees)  # TODO: tune on hardware
+  joints:
+    shoulder_pan: 0.0
+    shoulder_lift: -90.0
+    elbow_flex: 90.0
+    wrist_flex: 0.0
+    wrist_roll: 0.0
+    gripper: 50.0            # open-ish
+
+gripper:
+  open: 60.0                 # gripper "open" command  (norm range ~0..100)
+  closed: 5.0                # gripper "closed" command
+  # After closing on an object the gripper stops short of fully closed. If the
+  # measured position is BELOW this, it closed on nothing -> a missed grasp.
+  miss_below: 8.0            # TODO: tune (read gripper value on a good vs empty grasp)
+
+ik:                          # simplified planar kinematics  # TODO: MEASURE links
+  l1: 0.116                  # shoulder->elbow link length (m)
+  l2: 0.135                  # elbow->wrist link length (m)
+  base_height: 0.06          # shoulder pivot height above table (m)
+  wrist_length: 0.05         # wrist pivot -> gripper tip, pointing down (m)
+  elbow_up: false            # elbow-up vs elbow-down IK branch
+  # Map raw IK angle -> servo degrees per joint: deg = sign*degrees(angle) + offset.
+  # These depend on your calibration zero/direction -- tune with scripts/dry_run
+  # and slow jogging.  # TODO: tune
+  sign:   {shoulder_pan: 1, shoulder_lift: 1, elbow_flex: 1, wrist_flex: 1}
+  offset: {shoulder_pan: 0, shoulder_lift: 0, elbow_flex: 0, wrist_flex: 0}
+
+safety:
+  # Per-joint hard limits (degrees). Refuse / clamp anything outside.  # TODO: confirm
+  joint_limits:
+    shoulder_pan:  [-110, 110]
+    shoulder_lift: [-110, 110]
+    elbow_flex:    [-110, 110]
+    wrist_flex:    [-110, 110]
+    wrist_roll:    [-180, 180]
+    gripper:       [-5, 105]
+  max_step_deg: 6.0          # max joint change per command tick (speed cap). Start LOW.
+  step_pause_s: 0.04         # pause between interpolation ticks (slower = safer)
+  settle_s: 0.4              # pause after reaching a pose
+
+perception:
+  model_id: google/owlvit-base-patch32
+  classes: ["can", "bottle", "crumpled paper wrapper"]   # TODO: your exact items
+  confidence: 0.25
+  device: cpu                # set "cuda" if you have a GPU (much faster)
+  # Pixel ROI on the scene image: only detections whose center is inside count.
+  # Use this to exclude the arm and the bin from the table view.  # TODO: tune
+  roi: {x_min: 0, y_min: 0, x_max: 640, y_max: 480}
+
+loop:
+  strategy: nearest          # nearest | most_isolated | confidence
+  max_items: 12              # safety cap on picks per run
+  max_retries: 2             # grasp retries before skipping an item

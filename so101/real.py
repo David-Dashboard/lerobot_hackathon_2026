@@ -11,10 +11,18 @@ from .obs import joints_to_action, observation_to_joints
 
 
 class SO101Arm:
-    def __init__(self, port: str, arm_id: str = "follower", calibrate: bool = True):
+    def __init__(
+        self,
+        port: str,
+        arm_id: str = "follower",
+        calibrate: bool = True,
+        cameras: dict | None = None,
+    ):
         self.port = port
         self.id = arm_id
         self._calibrate = calibrate
+        # name -> {"index", "width", "height", "fps"}; empty means no cameras.
+        self._cameras = cameras or {}
         self._robot = None  # constructed on connect()
 
     @property
@@ -25,7 +33,9 @@ class SO101Arm:
         # Lazy import keeps LeRobot/torch out of the import path everywhere else.
         from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
 
-        cfg = SO101FollowerConfig(port=self.port, id=self.id, cameras={})
+        cfg = SO101FollowerConfig(
+            port=self.port, id=self.id, cameras=self._build_camera_configs()
+        )
         self._robot = SO101Follower(cfg)
         self._robot.connect(calibrate=self._calibrate)
 
@@ -37,9 +47,31 @@ class SO101Arm:
         self._require_connected()
         return observation_to_joints(self._robot.get_observation())
 
+    def read_observation(self) -> dict:
+        """Raw LeRobot observation: joint ``"<j>.pos"`` floats plus any camera frames
+        (numpy ``HxWx3`` uint8 arrays keyed by camera name). Used by the recorder so
+        state and images come from one synchronized read."""
+        self._require_connected()
+        return self._robot.get_observation()
+
     def write_joints(self, positions: dict[str, float]) -> None:
         self._require_connected()
         self._robot.send_action(joints_to_action(positions))
+
+    def _build_camera_configs(self) -> dict:
+        if not self._cameras:
+            return {}
+        from lerobot.cameras.opencv import OpenCVCameraConfig
+
+        return {
+            name: OpenCVCameraConfig(
+                index_or_path=spec["index"],
+                width=spec["width"],
+                height=spec["height"],
+                fps=spec.get("fps", 30),
+            )
+            for name, spec in self._cameras.items()
+        }
 
     def _require_connected(self) -> None:
         if not self.is_connected:
