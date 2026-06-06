@@ -25,6 +25,13 @@ import uvicorn
 from so101.factory import make_arm
 from so101.server import create_app
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()  # make QUALIA_TOKEN / HF_TOKEN from .env available
+except ImportError:
+    pass
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -47,7 +54,8 @@ def main() -> None:
     print(f"Connecting to {'MOCK' if args.mock else args.port} ...")
     arm.connect()
     app = create_app(arm)
-    print(f"Serving on http://{args.host}:{args.http_port}  (Ctrl+C to stop)")
+    print(f"Dashboard:  http://localhost:{args.http_port}/")
+    print(f"API on http://{args.host}:{args.http_port}  (Ctrl+C to stop)")
     try:
         uvicorn.run(app, host=args.host, port=args.http_port, log_level="info")
     finally:

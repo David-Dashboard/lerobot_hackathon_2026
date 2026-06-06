@@ -27,10 +27,12 @@ so101/
   mock.py        MockArm — simulated, implements RobotArm     (no deps)
   real.py        SO101Arm — adapter over LeRobot (lazy import; ONLY torch-touching file)
   factory.py     make_arm(mock=...) -> RobotArm
-  server.py      create_app(arm) -> FastAPI (/health, GET+POST /joints)
+  server.py      create_app(arm) -> FastAPI (arm + qualia routes + dashboard)
   client.py      ArmClient — drive an arm from another machine
+  qualia_client.py  thin Qualia SDK wrapper (VLA finetuning)
+  static/index.html dashboard UI (arm control + finetune launcher)
 hello_read.py    read + visualize in Rerun  (supports --mock)
-serve.py         run the remote-control server (--mock or --port COMx)
+serve.py         run the server + dashboard (--mock or --port COMx)
 ```
 
 ## What's here
@@ -87,6 +89,30 @@ arm.write_joints({"gripper": 10.0})
 
 > ⚠️ `POST /joints` moves a real arm. It's safe against `--mock`; on hardware,
 > make sure the arm is calibrated and the workspace is clear.
+
+## Dashboard UI
+
+`serve.py` also serves a browser dashboard at **`http://localhost:8000/`**:
+
+- **Arm panel** — live joint readout + sliders to command the arm (works with `--mock`).
+- **Finetune · Qualia panel** — shows credit balance, and launches a real
+  [Qualia](https://qualiastudios.dev) VLA finetune on a Hugging Face dataset
+  (pick VLA type / hours / base model), with a live job list.
+
+```powershell
+.\.venv\Scripts\python.exe serve.py --mock      # open http://localhost:8000/
+```
+
+Qualia needs a token in `.env`:
+
+```
+QUALIA_TOKEN=...      # from the Qualia dashboard (Settings)
+HF_TOKEN=...          # already set
+```
+
+The dashboard loads even without a token — the Qualia panel just shows
+"no token" instead of erroring. Finetuning happens on Qualia's GPUs, so it works
+regardless of your local hardware.
 
 ## Quick start
 

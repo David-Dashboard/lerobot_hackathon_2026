@@ -4,6 +4,8 @@
 
 lerobot[feetech]      # robot control + Feetech motor SDK
 rerun-sdk             # visualization
-fastapi               # remote-control HTTP server
+fastapi               # remote-control HTTP server + dashboard
 uvicorn[standard]     # ASGI server to run it
 httpx                 # client (and FastAPI TestClient)
+qualia-sdk            # VLA finetuning (Qualia)
+python-dotenv         # load tokens from .env

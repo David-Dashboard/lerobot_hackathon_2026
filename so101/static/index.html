@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SO-101 Control</title>
+<style>
+  :root { --bg:#0f1320; --card:#1a2032; --ink:#e6e9f0; --mut:#8b93a7; --acc:#5b8cff; --ok:#36d399; --bad:#f87272; --warn:#fbbd23; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:16px 24px; border-bottom:1px solid #2a3148; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--mut); display:inline-block; }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
+  .wrap { max-width:980px; margin:0 auto; padding:24px; display:grid; gap:24px; grid-template-columns:1fr 1fr; }
+  @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid #2a3148; border-radius:12px; padding:20px; }
+  .card h2 { margin:0 0 14px; font-size:15px; letter-spacing:.3px; text-transform:uppercase; color:var(--mut); }
+  .joint { display:grid; grid-template-columns:120px 1fr 64px; align-items:center; gap:10px; margin:8px 0; }
+  .joint label { color:var(--mut); font-size:13px; }
+  .joint output { text-align:right; font-variant-numeric:tabular-nums; }
+  input[type=range]{ width:100%; accent-color:var(--acc); }
+  input[type=text], input[type=number], select {
+    width:100%; background:#0f1320; color:var(--ink); border:1px solid #2a3148; border-radius:8px; padding:8px 10px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0; }
+  .field { margin:8px 0; } .field label { display:block; color:var(--mut); font-size:12px; margin-bottom:4px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid #2a3148; color:var(--ink); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted { color:var(--mut); font-size:13px; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid #2a3148; color:var(--mut); }
+  .msg { font-size:13px; margin-top:8px; min-height:18px; }
+  .msg.ok{ color:var(--ok);} .msg.bad{ color:var(--bad);} .msg.warn{ color:var(--warn);}
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #2a3148; }
+  code { background:#0f1320; padding:1px 5px; border-radius:5px; }
+</style>
+</head>
+<body>
+<header>
+  <span id="hdot" class="dot"></span>
+  <h1>SO-101 Control</h1>
+  <span id="hmode" class="pill">…</span>
+</header>
+
+<div class="wrap">
+  <!-- ARM -->
+  <section class="card">
+    <h2>Arm</h2>
+    <div id="joints"></div>
+    <div class="bar" style="margin-top:12px">
+      <button id="send">Send to arm</button>
+      <button id="zero" class="ghost">Zero all</button>
+      <span id="armMsg" class="msg"></span>
+    </div>
+    <p class="muted">Live values poll <code>/joints</code>; “Send” POSTs your slider targets. Safe against the mock.</p>
+  </section>
+
+  <!-- QUALIA -->
+  <section class="card">
+    <h2>Finetune · Qualia</h2>
+    <div class="bar"><span class="muted">Credits:</span> <b id="credits">…</b> <span id="qcfg" class="pill"></span></div>
+    <div class="field"><label>Dataset (HF repo id)</label>
+      <input id="dataset" type="text" value="lerobot/svla_so101_pickplace" /></div>
+    <div class="row">
+      <div class="field"><label>VLA type</label>
+        <select id="vla">
+          <option value="smolvla">smolvla</option>
+          <option value="act">act</option>
+          <option value="pi0">pi0</option>
+          <option value="pi05">pi05</option>
+          <option value="groot">groot</option>
+          <option value="sarm">sarm</option>
+        </select></div>
+      <div class="field"><label>Hours</label><input id="hours" type="number" step="0.5" value="2" /></div>
+    </div>
+    <div class="field"><label>Base model id (optional)</label>
+      <input id="model" type="text" value="lerobot/smolvla_base" /></div>
+    <div class="row">
+      <div class="field"><label>Camera key (in dataset)</label><input id="camKey" type="text" placeholder="observation.images.front" /></div>
+      <div class="field"><label>Maps to</label><input id="camName" type="text" placeholder="cam_1" /></div>
+    </div>
+    <div class="bar">
+      <button id="launch">Launch finetune</button>
+      <button id="refreshJobs" class="ghost">Refresh jobs</button>
+      <span id="qMsg" class="msg"></span>
+    </div>
+    <table id="jobs" style="margin-top:12px"><thead><tr><th>job</th><th>status</th><th>phase</th></tr></thead><tbody></tbody></table>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const JOINTS = ["shoulder_pan","shoulder_lift","elbow_flex","wrist_flex","wrist_roll","gripper"];
+
+// ---- Arm ----
+function buildJoints() {
+  const box = $("#joints"); box.innerHTML = "";
+  for (const j of JOINTS) {
+    const row = document.createElement("div"); row.className = "joint";
+    row.innerHTML = `<label>${j}</label>
+      <input type="range" min="-100" max="100" step="0.5" value="0" id="r_${j}" />
+      <output id="o_${j}">0.0</output>`;
+    box.appendChild(row);
+    row.querySelector("input").addEventListener("input", e => { $("#o_"+j).textContent = (+e.target.value).toFixed(1); e.target.dataset.touched="1"; });
+  }
+}
+async function pollArm() {
+  try {
+    const h = await (await fetch("/health")).json();
+    $("#hdot").className = "dot " + (h.connected ? "on":"off");
+    const r = await (await fetch("/joints")).json();
+    for (const [j,v] of Object.entries(r.positions||{})) {
+      const slider = $("#r_"+j); if (!slider) continue;
+      $("#o_"+j).textContent = (+v).toFixed(1);
+      if (slider.dataset.touched !== "1") slider.value = v;   // follow live until user grabs it
+    }
+  } catch(e){ $("#hdot").className = "dot off"; }
+}
+$("#send").onclick = async () => {
+  const positions = {}; for (const j of JOINTS) positions[j] = +$("#r_"+j).value;
+  setMsg("#armMsg", "sending…");
+  try { const r = await (await fetch("/joints",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({positions})})).json();
+    setMsg("#armMsg", r.ok ? "sent ✓" : "error", r.ok?"ok":"bad");
+  } catch(e){ setMsg("#armMsg","error: "+e,"bad"); }
+};
+$("#zero").onclick = () => { for (const j of JOINTS){ const s=$("#r_"+j); s.value=0; s.dataset.touched="1"; $("#o_"+j).textContent="0.0"; } };
+
+// ---- Qualia ----
+async function loadCredits() {
+  const r = await (await fetch("/qualia/credits")).json();
+  if (r.ok) { $("#credits").textContent = (r.data.balance ?? JSON.stringify(r.data)); $("#qcfg").textContent="connected"; }
+  else { $("#credits").textContent = "—"; $("#qcfg").textContent = r.configured===false ? "no token" : "error"; setMsg("#qMsg", r.error, "warn"); }
+}
+async function loadJobs() {
+  const r = await (await fetch("/qualia/jobs")).json();
+  const tb = $("#jobs tbody"); tb.innerHTML = "";
+  if (!r.ok) return;
+  for (const j of r.data) {
+    const id = (j.job_id||j.id||"").toString().slice(0,8);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><code>${id}</code></td><td>${j.status||"-"}</td><td>${j.current_phase||j.phase||"-"}</td>`;
+    tb.appendChild(tr);
+  }
+}
+$("#launch").onclick = async () => {
+  const dataset_id = $("#dataset").value.trim();
+  if (!dataset_id) return setMsg("#qMsg","dataset required","bad");
+  if (!confirm(`Launch a REAL Qualia finetune?\n\ndataset: ${dataset_id}\nvla: ${$("#vla").value}\nhours: ${$("#hours").value}\n\nThis spends credits.`)) return;
+  const body = { dataset_id, vla_type:$("#vla").value, hours:+$("#hours").value, model_id:$("#model").value.trim()||null };
+  const ck=$("#camKey").value.trim(), cn=$("#camName").value.trim();
+  if (ck && cn) body.camera_mappings = { [cn]: ck };
+  setMsg("#qMsg","launching…");
+  $("#launch").disabled = true;
+  try {
+    const r = await (await fetch("/qualia/finetune",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})).json();
+    if (r.ok) setMsg("#qMsg", "launched ✓ job "+(r.data.job_id||"").slice(0,8), "ok");
+    else setMsg("#qMsg", r.error, "bad");
+    loadJobs(); loadCredits();
+  } catch(e){ setMsg("#qMsg","error: "+e,"bad"); }
+  finally { $("#launch").disabled = false; }
+};
+$("#refreshJobs").onclick = loadJobs;
+
+function setMsg(sel,t,cls){ const el=$(sel); el.textContent=t||""; el.className="msg "+(cls||""); }
+
+// init
+buildJoints();
+fetch("/health").then(r=>r.json()).then(h=>{ $("#hmode").textContent = h.connected? "arm connected":"arm offline"; }).catch(()=>{ $("#hmode").textContent="server"; });
+pollArm(); setInterval(pollArm, 700);
+loadCredits(); loadJobs(); setInterval(loadJobs, 8000);
+</script>
+</body>
+</html>
