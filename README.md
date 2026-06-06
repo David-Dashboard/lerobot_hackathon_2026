@@ -227,6 +227,54 @@ Local ACT (free, CPU-capable):
 ```
 Qualia VLA finetune (cloud; needs `QUALIA_TOKEN` + dataset on the HF Hub) — use the dashboard (`serve.py`) or `so101.qualia_client.launch_finetune`.
 
+## Train from generated data (few demos, no robot)
+
+Teleoperation is slow, and a handful of episodes is too few to train a robust
+pick-up policy. `augment_dataset.py` multiplies a recorded `LeRobotDataset` into a
+larger one — emitting several augmented variants of each episode — so you get more
+training data with **no extra teleoperation and no hardware**. `eval_offline.py`
+then scores a trained checkpoint **without a robot**.
+
+> **What this does and doesn't do.** Augmentation improves *robustness/generalization*
+> from the demos you already have (trajectory jitter, optional left↔right mirror,
+> light geometric image aug). It does **not** invent new grasp strategies or object
+> positions absent from the source demos — for genuinely new coverage you need more
+> real demos or a physics simulator (see *Foundation: physics sim*).
+
+```powershell
+# 1. Augment: 8 episodes -> ~40 (8 originals + 4 variants each). Hold an episode
+#    or two OUT of training so you can evaluate on them.
+python augment_dataset.py --src-root recorded/demos --src-repo-id local/demos `
+  --out-root recorded/demos_aug --out-repo-id local/demos_aug --multiplier 4
+#    (add --mirror for extra spatial coverage — EXPERIMENTAL; eyeball one mirrored
+#     episode in Rerun first. add --push-to-hub to train on Qualia.)
+
+# 2. Train on the augmented set (local ACT, or Qualia on the pushed dataset)
+lerobot-train --dataset.repo_id=local/demos_aug --dataset.root=recorded/demos_aug --policy.type=act ...
+
+# 3. Evaluate offline against a HELD-OUT episode (no robot)
+python eval_offline.py --checkpoint outputs/train/demos_aug_act/checkpoints/last/pretrained_model `
+  --dataset-root recorded/demos --dataset-repo-id local/demos --episode-index 7 `
+  --out-dir outputs/eval/demos_ep7
+```
+
+`eval_offline` writes `summary.json` (per-joint / overall action error) and a
+predicted-vs-ground-truth `trajectories.png`. It measures *open-loop next-action
+error* — it **ranks checkpoints** (did augmentation lower the error?) but does not
+prove grasping; confirm real performance on the arm when one is available.
+
+### Foundation: physics sim (future)
+
+The above squeezes the most out of few real demos. To generate *unlimited* demos
+and train a grasp policy that can be transferred to the real SO-101 (sim-to-real),
+the next step is a physics simulation of the arm + a graspable object — e.g.
+[LeRobot sim envs](https://github.com/huggingface/lerobot),
+[ManiSkill](https://github.com/haosulab/ManiSkill) (SO-100 support), or a
+[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) SO-ARM
+model. A sim arm would conform to the same `RobotArm` protocol (`so101/interface.py`)
+as `MockArm`, so recording/deploy/eval reuse unchanged. This is deferred because it
+needs the physical arm on hand to calibrate the sim-to-real gap.
+
 ### 8. Scripted trash-collecting pipeline (perceive → localize → pick)
 ```powershell
 .\.venv\Scripts\python.exe scripts/calibrate_camera.py     # build pixel→table homography (M2)
