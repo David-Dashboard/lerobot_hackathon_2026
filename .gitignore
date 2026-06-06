@@ -18,6 +18,9 @@ logs/
 
 # Secrets / tokens
 .env
+.env.*
+*.env
+*.env.txt
 *.token
 
 # OS / editor
