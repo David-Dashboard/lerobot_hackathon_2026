@@ -210,6 +210,11 @@ lerobot-teleoperate `
 | `--no-calibrate` | load saved calibration (don't re-run the prompt) |
 | `--mock` | simulated arms (no hardware) |
 
+**Timed-mode smoke test** (fixed-length episodes, no ENTER prompts — OAK as `scene`, webcam as `wrist`):
+```powershell
+.\.venv\Scripts\python.exe record_teleop.py --robot-port COM5 --robot-id my_follower --teleop-port COM4 --teleop-id my_leader --oak --oak-name scene --camera wrist=1:640x480 --no-calibrate --display --overwrite --episodes 10 --episode-seconds 15 --reset-seconds 0 --fps 30 --root recorded/02_smoke_correct --repo-id local/02_smoke_correct --task "smoke test"
+```
+
 ### 6. Verify a recorded dataset
 ```powershell
 .\.venv\Scripts\python.exe -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset as D; d=D(repo_id='local/demos', root='recorded/demos'); print('episodes', d.num_episodes, 'frames', d.num_frames, list(d.features))"
