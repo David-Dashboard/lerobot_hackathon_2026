@@ -138,6 +138,103 @@ In the dashboard, top to bottom:
 
 Swap `--mock` for `--port COM3` and the same dashboard drives the real SO-101.
 
+## End-to-end on real hardware (SO-101 + cameras + OAK-D)
+
+The full hardware flow: bring up the arms, set up cameras, teleoperate, record
+demonstrations (OpenCV **and** OAK-D cameras at once), and train. PowerShell
+shown; for WSL2 run `bash setup_wsl2.sh` first and swap `COM5`→`/dev/ttyACM0` etc.
+
+> In PowerShell, run multi-line commands as **one line** — a dropped backtick
+> (`` ` ``) silently truncates the command into defaults.
+
+### 0. Environment
+```powershell
+uv venv --python 3.11
+uv pip install -r requirements.txt        # lerobot, rerun, transformers (<5), opencv, pyyaml, ...
+uv pip install depthai                    # OAK-D-PRO (DepthAI)
+```
+WSL2: `bash setup_wsl2.sh` does all of this + dialout/udev/usbipd setup.
+
+### 1. Find the arm ports (stable, by board serial)
+COM numbers drift on replug; the CH343 board **serial** is stable.
+```powershell
+Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'COM[0-9]+' } | Select-Object Name, DeviceID
+```
+Example mapping: **follower = COM5** (`…706`), **leader = COM4** (`…811`). Verify reads (no motion):
+```powershell
+.\.venv\Scripts\python.exe -c "from so101 import make_arm; a=make_arm(port='COM5',arm_id='my_follower',calibrate=False); a.connect(); print(a.read_joints()); a.disconnect()"
+```
+
+### 2. Calibrate (once per arm)
+```powershell
+.\.venv\Scripts\lerobot-calibrate.exe --robot.type=so101_follower --robot.port=COM5 --robot.id=my_follower
+.\.venv\Scripts\lerobot-calibrate.exe --teleop.type=so101_leader  --teleop.port=COM4 --teleop.id=my_leader
+```
+
+### 3. Cameras
+- **Enable camera access:** Settings → Privacy & security → Camera → "Camera access" **ON** (a global OFF blocks OpenCV entirely).
+- **Find OpenCV camera indices:** `.\.venv\Scripts\python.exe scripts/test_perception.py --list`
+- **View feeds in Rerun** (set PATH once per terminal so Rerun's viewer is found):
+```powershell
+$env:Path = "$PWD\.venv\Scripts;$env:Path"
+.\.venv\Scripts\python.exe scripts/oak_view.py                              # live OAK-D RGB
+.\.venv\Scripts\python.exe scripts/view_cameras.py --camera scene=0 --camera wrist=1   # OpenCV cams
+```
+
+### 4. Teleoperate (leader drives follower) with camera feed
+```powershell
+$env:Path = "$PWD\.venv\Scripts;$env:Path"
+lerobot-teleoperate `
+  --robot.type=so101_follower --robot.port=COM5 --robot.id=my_follower `
+  --robot.cameras="{ scene: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" `
+  --teleop.type=so101_leader  --teleop.port=COM4 --teleop.id=my_leader `
+  --display_data=true --fps=30
+```
+> The OAK can't go through `--robot.cameras` (OpenCV-only). Record it via `record_teleop.py --oak`.
+
+### 5. Record demonstrations (OpenCV + OAK cameras simultaneously)
+`record_teleop.py` mirrors leader→follower and saves state + action + every camera into a LeRobotDataset.
+```powershell
+.\.venv\Scripts\python.exe record_teleop.py --robot-port COM5 --robot-id my_follower --teleop-port COM4 --teleop-id my_leader --oak --oak-name scene --camera wrist=1:640x480 --no-calibrate --display --overwrite --manual --episodes 20 --fps 30 --root recorded/demos --repo-id local/demos --task "pick up the trash and drop it in the bin"
+```
+
+| Flag | Meaning |
+|---|---|
+| `--oak [--oak-name N]` | record the OAK-D RGB (DepthAI) as image key `N` |
+| `--camera N=IDX:WxH` | add an OpenCV camera (repeatable) |
+| `--manual` | press ENTER to start/stop each episode, `q` to finish |
+| `--episodes N` | number of demos (a max in manual mode) |
+| `--episode-seconds` / `--reset-seconds` | timed mode only |
+| `--display` | stream joints **and** all camera feeds to Rerun |
+| `--overwrite` | replace an existing dataset (else it fails fast, *before* touching hardware) |
+| `--no-calibrate` | load saved calibration (don't re-run the prompt) |
+| `--mock` | simulated arms (no hardware) |
+
+### 6. Verify a recorded dataset
+```powershell
+.\.venv\Scripts\python.exe -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset as D; d=D(repo_id='local/demos', root='recorded/demos'); print('episodes', d.num_episodes, 'frames', d.num_frames, list(d.features))"
+```
+
+### 7. Train
+Local ACT (free, CPU-capable):
+```powershell
+.\.venv\Scripts\lerobot-train.exe --dataset.repo_id=local/demos --dataset.root=recorded/demos --policy.type=act --policy.device=cpu --output_dir=outputs/train/demos_act --job_name=demos_act --batch_size=4 --num_workers=0 --steps=100000 --save_freq=200 --wandb.enable=false
+```
+Qualia VLA finetune (cloud; needs `QUALIA_TOKEN` + dataset on the HF Hub) — use the dashboard (`serve.py`) or `so101.qualia_client.launch_finetune`.
+
+### 8. Scripted trash-collecting pipeline (perceive → localize → pick)
+```powershell
+.\.venv\Scripts\python.exe scripts/calibrate_camera.py     # build pixel→table homography (M2)
+.\.venv\Scripts\python.exe scripts/test_perception.py      # detector on the live scene cam (M3)
+.\.venv\Scripts\python.exe scripts/dry_run.py              # full loop, MOTION DISABLED (M5 prep)
+.\.venv\Scripts\python.exe scripts/run.py                  # the real autonomous loop
+```
+Ports, camera indices, workspace limits, and bin coords all live in **`config.yaml`**.
+
+> **Experiment branch `coord-grasp`** — a self-calibrating, *coordinate-only* grasp
+> approach (ArUco/depth → metric XYZ → a pixel-free, goal-conditioned policy). See
+> `coord_grasp/` on that branch.
+
 ## Quick start
 
 - **Windows** → see **[RUNBOOK.md](RUNBOOK.md)**
