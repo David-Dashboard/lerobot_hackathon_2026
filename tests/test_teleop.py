@@ -152,3 +152,64 @@ def test_record_teleop_manual_episode_control(tmp_path):
     assert starts == [0, 1, 2]
     assert summary["num_episodes"] == 2
     assert summary["num_frames"] == 6  # 2 episodes x 3 frames
+
+
+def test_record_teleop_extra_cameras(tmp_path):
+    # A non-UVC camera (e.g. OAK) recorded alongside the OpenCV ones, via .read().
+    class FakeCam:
+        def read(self):
+            return np.full((48, 64, 3), 7, dtype=np.uint8)
+
+    summary = record_teleop_dataset(
+        MockArm(),
+        MockTeleop(),
+        repo_id="local/test_extra",
+        task="t",
+        cameras={},                       # no OpenCV cameras
+        extra_cameras={"oak": FakeCam()},  # only the extra one
+        num_episodes=1,
+        episode_steps=3,
+        root=tmp_path / "ds_extra",
+    )
+    assert summary["num_frames"] == 3
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    ds = LeRobotDataset(repo_id="local/test_extra", root=tmp_path / "ds_extra")
+    feats = set(ds.features)
+    assert "observation.images.oak" in feats
+    assert tuple(ds[0]["observation.images.oak"].shape) == (3, 48, 64)  # CHW tensor
+
+
+def test_prepare_dataset_dir(tmp_path):
+    from so101.record import prepare_dataset_dir
+
+    d = tmp_path / "ds"
+    d.mkdir()
+    (d / "data.txt").write_text("x")
+
+    # non-empty + no overwrite -> error
+    with pytest.raises(FileExistsError):
+        prepare_dataset_dir("local/x", root=d, overwrite=False)
+    # overwrite -> removed
+    prepare_dataset_dir("local/x", root=d, overwrite=True)
+    assert not d.exists()
+    # empty leftover -> cleared silently
+    d.mkdir()
+    prepare_dataset_dir("local/x", root=d, overwrite=False)
+    assert not d.exists()
+
+
+def test_record_teleop_fails_fast_before_hardware(tmp_path):
+    # An existing dataset must raise BEFORE the arms are connected.
+    d = tmp_path / "ds"
+    d.mkdir()
+    (d / "data.txt").write_text("x")
+    follower, teleop = MockArm(), MockTeleop()
+    with pytest.raises(FileExistsError):
+        record_teleop_dataset(
+            follower, teleop, repo_id="local/x", task="t",
+            root=d, num_episodes=1, episode_steps=1,
+        )
+    assert follower.is_connected is False
+    assert teleop.is_connected is False

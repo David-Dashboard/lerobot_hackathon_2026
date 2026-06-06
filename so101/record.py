@@ -166,6 +166,49 @@ def build_teleop_features(cameras: dict) -> dict:
     return feats
 
 
+def dataset_root_path(repo_id: str, root=None):
+    """Where a dataset will live: `root` if given, else LeRobot's cache / repo_id."""
+    from pathlib import Path
+
+    if root is not None:
+        return Path(root)
+    try:
+        from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
+    except Exception:  # pragma: no cover - import path varies by version
+        try:
+            from lerobot.constants import HF_LEROBOT_HOME
+        except Exception:
+            HF_LEROBOT_HOME = Path.home() / ".cache" / "huggingface" / "lerobot"
+    return Path(HF_LEROBOT_HOME) / repo_id
+
+
+def prepare_dataset_dir(repo_id: str, root=None, overwrite: bool = False):
+    """Validate/clear the target dataset dir BEFORE any hardware is touched.
+
+    LeRobot's `create()` refuses to write into an existing directory. This checks
+    that up front so a name clash fails fast (not after connecting the arms):
+      * empty leftover dir  -> removed silently
+      * non-empty + overwrite -> removed
+      * non-empty, no overwrite -> FileExistsError with an actionable message
+    Returns the resolved target path.
+    """
+    import shutil
+
+    target = dataset_root_path(repo_id, root)
+    if target.exists():
+        if not any(target.iterdir()):
+            shutil.rmtree(target)
+        elif overwrite:
+            shutil.rmtree(target)
+        else:
+            raise FileExistsError(
+                f"A dataset already exists at:\n  {target}\n"
+                "Re-run with --overwrite to replace it, or pick a new "
+                "--repo-id / --root."
+            )
+    return target
+
+
 def record_teleop_dataset(
     follower: RobotArm,
     teleop: Teleoperator,
@@ -173,14 +216,17 @@ def record_teleop_dataset(
     task: str,
     *,
     cameras: dict | None = None,
+    extra_cameras: dict | None = None,
     num_episodes: int = 2,
     episode_steps: int | None = 200,
     reset_steps: int = 0,
     fps: int = 30,
     root=None,
+    overwrite: bool = False,
     push_to_hub: bool = False,
     synthetic_frames: bool = False,
     on_step=None,
+    on_images=None,
     progress=None,
     should_stop=None,
     await_start=None,
@@ -197,7 +243,12 @@ def record_teleop_dataset(
             captured from its observation. (A `RobotArm`; ``SO101Arm`` for real
             frames, ``MockArm`` for offline testing.)
         teleop: the leader supplying actions (``SO101Teleop`` or ``MockTeleop``).
-        cameras: name -> spec dict; defines which image keys land in the dataset.
+        cameras: name -> spec dict; OpenCV cameras captured via the follower's
+            observation. Defines which image keys land in the dataset.
+        extra_cameras: name -> camera object exposing ``.read() -> HxWx3 RGB`` (e.g.
+            an OAK via DepthAI, which isn't UVC so can't go through `cameras`).
+            Captured each step *alongside* `cameras`, so OpenCV + non-UVC cameras
+            record simultaneously. The caller connects/closes them.
         episode_steps: frames recorded per episode (≈ episode_seconds * fps), or
             None to record until `end_episode` fires (manual / Enter-controlled mode).
         reset_steps: frames to keep teleoperating *without* recording between
@@ -206,6 +257,8 @@ def record_teleop_dataset(
             the mock follower has no real cameras), synthesize a deterministic one
             instead of failing -- lets the whole pipeline run with no hardware.
         on_step(state_joints, action_joints): per-frame hook (e.g. Rerun logging).
+        on_images(images): per-frame hook with ``{name: HxWx3 RGB}`` for every camera
+            (OpenCV + extra), e.g. to stream the live feeds to Rerun.
         should_stop(): optional predicate; if it returns True the loop ends cleanly
             after finishing the current frame (e.g. a Ctrl+C / e-stop flag).
         await_start(ep_index): optional callable invoked BEFORE each episode (may
@@ -220,16 +273,28 @@ def record_teleop_dataset(
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     cameras = cameras or {}
+    extra_cameras = extra_cameras or {}
+
+    # Fail fast on a name clash BEFORE connecting any hardware.
+    prepare_dataset_dir(repo_id, root, overwrite)
 
     if not follower.is_connected:
         follower.connect()
     if not teleop.is_connected:
         teleop.connect()
 
+    # Extra cameras (e.g. an OAK via DepthAI) are any object with .read() -> RGB and
+    # run alongside the follower's OpenCV cameras. Read one frame each to learn their
+    # shape for the dataset schema.
+    feature_cams = dict(cameras)
+    for name, cam in extra_cameras.items():
+        h, w = np.asarray(cam.read()).shape[:2]
+        feature_cams[name] = {"width": w, "height": h}
+
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         fps=fps,
-        features=build_teleop_features(cameras),
+        features=build_teleop_features(feature_cams),
         root=root,
         robot_type="so101_follower",
         use_videos=False,
@@ -267,24 +332,31 @@ def record_teleop_dataset(
             state = np.array([state_joints[j] for j in SO101_JOINTS], dtype=np.float32)
             act = np.array([action[j] for j in SO101_JOINTS], dtype=np.float32)
             frame = {"observation.state": state, "action": act, "task": task}
+            images = {}
             for name, spec in cameras.items():
                 if name in obs:
-                    frame[f"observation.images.{name}"] = np.asarray(obs[name])
+                    img = np.asarray(obs[name])
                 elif synthetic_frames:
-                    frame[f"observation.images.{name}"] = _synthetic_frame(
-                        state_joints, spec["height"], spec["width"]
-                    )
+                    img = _synthetic_frame(state_joints, spec["height"], spec["width"])
                 else:
                     raise KeyError(
                         f"camera {name!r} not in follower observation and "
                         "synthetic_frames=False"
                     )
+                frame[f"observation.images.{name}"] = img
+                images[name] = img
+            for name, cam in extra_cameras.items():
+                img = np.asarray(cam.read())
+                frame[f"observation.images.{name}"] = img
+                images[name] = img
             dataset.add_frame(frame)
 
             done += 1
             step += 1
             if on_step:
                 on_step(state_joints, action)
+            if on_images and images:
+                on_images(images)
             if progress:
                 progress(done, total)
 

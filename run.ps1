@@ -1,0 +1,1 @@
+.\.venv\Scripts\python.exe record_teleop.py --robot-port COM5 --robot-id my_follower --teleop-port COM4 --teleop-id my_leader --oak --oak-name scene --camera wrist=1:640x480 --no-calibrate --display --overwrite --episodes 10 --episode-seconds 15 --reset-seconds 0 --fps 30 --root recorded/02_smoke_correct --repo-id local/02_smoke_correct --task "smoke test" 

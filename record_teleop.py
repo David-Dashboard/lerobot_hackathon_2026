@@ -34,7 +34,7 @@ import argparse
 import threading
 
 from so101 import SO101_JOINTS, format_joint_line, make_arm, make_teleop
-from so101.record import parse_camera_spec, record_teleop_dataset
+from so101.record import parse_camera_spec, prepare_dataset_dir, record_teleop_dataset
 
 
 class _EnterWatcher:
@@ -83,6 +83,7 @@ def main() -> None:
     parser.add_argument("--repo-id", default="local/trash_teleop", help="LeRobotDataset repo id")
     parser.add_argument("--task", default="pick up the trash and drop it in the bin", help="natural-language task label")
     parser.add_argument("--root", default=None, help="dataset output dir (default: LeRobot cache)")
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing dataset at the target path instead of erroring")
     parser.add_argument("--push-to-hub", action="store_true", help="upload to the HF Hub when done")
 
     # Loop shape.
@@ -96,6 +97,11 @@ def main() -> None:
     parser.add_argument("--synthetic-frames", action="store_true", help="synthesize any camera frame missing from the observation (auto-on with --mock)")
     parser.add_argument("--no-calibrate", action="store_true", help="skip calibration prompts (arms must already be calibrated)")
     parser.add_argument("--display", action="store_true", help="stream leader/follower joints to Rerun")
+    # OAK-D-PRO (DepthAI) RGB -- recorded alongside the OpenCV --camera(s).
+    parser.add_argument("--oak", action="store_true", help="also record the OAK-D-PRO RGB camera (DepthAI, non-UVC) simultaneously")
+    parser.add_argument("--oak-name", default="oak", help="dataset image key for the OAK camera")
+    parser.add_argument("--oak-width", type=int, default=640)
+    parser.add_argument("--oak-height", type=int, default=400)
     args = parser.parse_args()
 
     if not args.mock and (not args.robot_port or not args.teleop_port):
@@ -113,7 +119,15 @@ def main() -> None:
         episode_steps = max(1, round(args.episode_seconds * args.fps))
         reset_steps = max(0, round(args.reset_seconds * args.fps))
 
-    on_step = _make_rerun_logger() if args.display else None
+    # Fail fast on a dataset name clash -- before spawning Rerun or touching hardware.
+    try:
+        target = prepare_dataset_dir(args.repo_id, args.root, args.overwrite)
+    except FileExistsError as e:
+        print(f"\nERROR: {e}")
+        raise SystemExit(1)
+    print(f"Recording into: {target}\n")
+
+    on_step, on_images = _make_rerun_logger() if args.display else (None, None)
 
     follower = make_arm(
         mock=args.mock, port=args.robot_port, arm_id=args.robot_id,
@@ -124,11 +138,21 @@ def main() -> None:
         calibrate=not args.no_calibrate,
     )
 
+    # Extra (non-UVC) cameras captured alongside the OpenCV ones -- e.g. the OAK.
+    extra_cameras = {}
+    if args.oak:
+        if args.oak_name in cameras:
+            parser.error(f"--oak-name {args.oak_name!r} collides with an OpenCV --camera name")
+        from coord_grasp.oak import OakCamera
+        extra_cameras[args.oak_name] = OakCamera(size=(args.oak_width, args.oak_height))
+
     label = "MOCK arms" if args.mock else f"follower {args.robot_id}@{args.robot_port}, leader {args.teleop_id}@{args.teleop_port}"
-    cam_label = ", ".join(cameras) if cameras else "none"
+    cam_label = ", ".join(list(cameras) + list(extra_cameras)) or "none"
     print(f"Connecting to {label} ... (cameras: {cam_label})")
     follower.connect()
     teleop.connect()
+    for cam in extra_cameras.values():
+        cam.connect()
     mode = "manual (ENTER starts/ends each episode)" if args.manual else f"{episode_steps} frames/episode"
     print(
         f"Connected. Up to {args.episodes} episode(s), {mode} @ {args.fps} fps into {args.repo_id!r}.\n"
@@ -157,11 +181,11 @@ def main() -> None:
         summary = record_teleop_dataset(
             follower, teleop,
             repo_id=args.repo_id, task=args.task,
-            cameras=cameras,
+            cameras=cameras, extra_cameras=extra_cameras,
             num_episodes=args.episodes, episode_steps=episode_steps,
-            reset_steps=reset_steps, fps=args.fps, root=args.root,
+            reset_steps=reset_steps, fps=args.fps, root=args.root, overwrite=args.overwrite,
             push_to_hub=args.push_to_hub, synthetic_frames=synthetic_frames,
-            on_step=on_step, progress=progress,
+            on_step=on_step, on_images=on_images, progress=progress,
             should_stop=lambda: interrupted["flag"],
             await_start=await_start if args.manual else None,
             end_episode=(lambda step: watcher.triggered) if args.manual else None,
@@ -175,6 +199,11 @@ def main() -> None:
     finally:
         teleop.disconnect()
         follower.disconnect()
+        for cam in extra_cameras.values():
+            try:
+                cam.close()
+            except Exception:
+                pass
         print("\nDisconnected.")
 
     if summary:
@@ -187,12 +216,15 @@ def main() -> None:
 
 
 def _make_rerun_logger():
-    """Return an on_step(state, action) that streams both to Rerun, or None if unavailable."""
+    """Return (on_step, on_images) that stream joints + live camera feeds to Rerun.
+
+    Returns (None, None) if rerun isn't importable.
+    """
     try:
         import rerun as rr
     except ImportError:
         print("(rerun not installed -- skipping --display)")
-        return None
+        return None, None
 
     rr.init("so101_teleop_record", spawn=True)
 
@@ -202,7 +234,11 @@ def _make_rerun_logger():
             rr.log(f"leader/{name}", rr.Scalars(action[name]))
         print("\r" + format_joint_line(state), end="", flush=True)
 
-    return on_step
+    def on_images(images: dict) -> None:
+        for name, img in images.items():
+            rr.log(f"cameras/{name}", rr.Image(img))
+
+    return on_step, on_images
 
 
 if __name__ == "__main__":
