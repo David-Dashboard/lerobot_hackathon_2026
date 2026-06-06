@@ -30,11 +30,30 @@ class OakCamera:
 
         self._dai = dai
         socket = getattr(dai.CameraBoardSocket, self.socket_name)
-        self._pipeline = dai.Pipeline()
-        cam = self._pipeline.create(dai.node.Camera).build(socket)
-        out = cam.requestOutput(self.size)  # default type; getCvFrame() yields BGR
-        self._queue = out.createOutputQueue()
-        self._pipeline.start()
+        # Build into LOCALS and only commit to self.* once start() succeeds, so a
+        # failed connect leaves is_connected False (lets connect-with-retry actually
+        # retry instead of seeing a half-built pipeline).
+        pipeline = dai.Pipeline()
+        try:
+            cam = pipeline.create(dai.node.Camera).build(socket)
+            out = cam.requestOutput(self.size)  # getCvFrame() yields BGR
+            queue = out.createOutputQueue()
+            pipeline.start()
+        except Exception:
+            try:
+                pipeline.stop()
+            except Exception:
+                pass
+            raise
+        self._pipeline = pipeline
+        self._queue = queue
+        # Warm up: discard the first few frames (startup frames can differ in size),
+        # so the recorder's one-frame schema probe sees the steady-state resolution.
+        for _ in range(5):
+            try:
+                self._queue.get()
+            except Exception:
+                break
 
     def read(self) -> np.ndarray:
         """Blocking read of one RGB frame (HxWx3 uint8)."""
@@ -46,8 +65,11 @@ class OakCamera:
         return cv2.cvtColor(pkt.getCvFrame(), cv2.COLOR_BGR2RGB)
 
     def close(self) -> None:
-        if self._pipeline is not None:
-            self._pipeline.stop()
+        try:
+            if self._pipeline is not None:
+                self._pipeline.stop()
+        finally:
+            # Always clear state even if stop() throws, so is_connected can't wedge True.
             self._pipeline = None
             self._queue = None
 
