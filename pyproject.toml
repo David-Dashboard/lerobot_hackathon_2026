@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Let tests import the root modules (arm_utils, mock_robot) directly.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

@@ -16,8 +16,25 @@ The `.venv/` is git-ignored — recreate it with the commands above.
 
 | File | Purpose |
 |------|---------|
-| `hello_read.py` | Read SO-101 joint positions and stream them live to Rerun (no motion). |
+| `hello_read.py` | Read SO-101 joint positions and stream them live to Rerun (no motion). Supports `--mock`. |
+| `arm_utils.py` | Pure, hardware-free helpers for parsing observations (unit-tested). |
+| `mock_robot.py` | A simulated SO-101 arm — develop/test with **no hardware**. |
+| `tests/` | Test suite that runs **without a robot** (`pytest`). |
 | `RUNBOOK.md` | Full command reference: find ports, calibrate, teleop, record, train, deploy. |
+
+## No-hardware development
+
+Run the full read/Rerun hello-world against a simulated arm:
+
+```powershell
+.\.venv\Scripts\python.exe hello_read.py --mock
+```
+
+Run the tests (install + data pipeline + mock arm — no robot needed):
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
 
 ## Quick start
 
