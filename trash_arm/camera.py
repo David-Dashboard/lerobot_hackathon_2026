@@ -37,7 +37,20 @@ class Camera:
         self.close()
 
 
-def open_scene_camera(cfg: dict) -> Camera:
-    """Build the scene camera from config."""
+def open_scene_camera(cfg: dict):
+    """Open the scene camera and return a CONNECTED object exposing .read()->RGB / .close().
+
+    Dispatches on ``cameras.scene.kind`` so the scripted deploy / perception / scene
+    calibration all use the SAME physical camera the recorder picks:
+      * kind "oak"  -> coord_grasp.oak.OakCamera (DepthAI), connected here.
+      * kind "uvc"  (default) -> OpenCV Camera at ``cameras.scene.index``.
+    """
     c = cfg["cameras"]["scene"]
-    return Camera(c["index"], c["width"], c["height"], c.get("fps", 30))
+    w, h = c.get("width", 640), c.get("height", 480)
+    if c.get("kind", "uvc") == "oak":
+        from coord_grasp.oak import OakCamera
+
+        cam = OakCamera(size=(w, h))
+        cam.connect()  # Camera (cv2) opens in __init__; connect the OAK so both are ready
+        return cam
+    return Camera(c["index"], w, h, c.get("fps", 30))

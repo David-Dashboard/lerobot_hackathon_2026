@@ -64,7 +64,6 @@ def run_scripted(cfg, *, execute: bool) -> None:
 
 
 def run_policy(cfg, policy_path: str, *, go: bool) -> None:
-    import arm_id  # noqa: F401 -- so101.arm_id via sys.path
     from so101 import arm_id as aid
 
     arms = aid.identify_arm_roles(cfg)

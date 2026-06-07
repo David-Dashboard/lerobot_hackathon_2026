@@ -107,10 +107,18 @@ class Motion:
             time.sleep(self.step_pause)
         time.sleep(self.settle)
 
-    def move_to_xyz(self, x: float, y: float, z: float, gripper: float | None = None) -> None:
-        """Move the gripper tip to table (x, y) at height z (pointing down)."""
+    def move_to_xyz(self, x: float, y: float, z: float, gripper: float | None = None,
+                    require_ws: bool = True) -> None:
+        """Move the gripper tip to table (x, y) at height z (pointing down).
+
+        `require_ws` gates the pick-workspace rectangle check: True for pick targets,
+        but False for the bin drop (the bin is intentionally a non-pick location,
+        often just outside the pick zone). IK reachability is still enforced by
+        plan_planar_ik below regardless.
+        """
         ws = self.cfg["workspace"]
-        safety.require_workspace(x, y, ws)
+        if require_ws:
+            safety.require_workspace(x, y, ws)
         z = safety.clamp_z(z, ws)
         joints = plan_planar_ik(x, y, z, self.cfg["ik"])
         joints["wrist_roll"] = self.arm.read_joints().get("wrist_roll", 0.0) if self.execute else 0.0
@@ -165,7 +173,7 @@ class Motion:
             return False
 
         bx, by = b["xy"]
-        self.move_to_xyz(bx, by, b["z_release"])              # over the bin
+        self.move_to_xyz(bx, by, b["z_release"], require_ws=False)  # bin is outside the pick zone
         self.open_gripper()                                   # release
         self.go_home()
         return True

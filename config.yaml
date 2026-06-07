@@ -20,13 +20,15 @@ teleop:                      # the leader: handheld, used only for data collecti
   serial: "5B41531811"       # stable board id (USB\VID_1A86&PID_55D3\5B41531811)
 
 cameras:
-  # index = OS camera index. Confirm with scripts/test_perception.py --list.
+  # Confirm camera identity/indices with: python pipeline/01_detect_hardware.py
   scene:                     # fixed top-down view of the table
-    index: 0                 # TODO: CONFIRM which OS index is the scene cam
-    width: 640
+    kind: oak                # "oak" (DepthAI OAK-D) or "uvc" (OpenCV webcam at `index`)
+    index: 0                 # only used when kind: uvc  (TODO: CONFIRM the OS index)
+    width: 640               # for the OAK this is the requested RGB output size
     height: 480
     fps: 30
-  wrist:                     # rigidly mounted on the wrist (used later / optional now)
+  wrist:                     # rigidly mounted on the wrist (OpenCV webcam)
+    kind: uvc
     index: 2                 # TODO: CONFIRM which OS index is the wrist cam
     width: 640
     height: 480

@@ -38,7 +38,10 @@ class Orchestrator:
             if self.localizer is not None and not self.localizer.in_roi(u, v):
                 continue
             d.table_xy = self.localizer.to_table(u, v) if self.localizer else None
-            if d.table_xy is None or safety.in_workspace(d.table_xy[0], d.table_xy[1], ws):
+            if d.table_xy is None:
+                self.log(f"   skip {d.label} (no table coords -- localizer/homography missing)")
+                continue
+            if safety.in_workspace(d.table_xy[0], d.table_xy[1], ws):
                 reachable.append(d)
             else:
                 self.log(f"   skip {d.label} @ {_fmt_xy(d.table_xy)} (out of workspace)")
