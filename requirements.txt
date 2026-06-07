@@ -1,5 +1,5 @@
-# Runtime dependencies for auto_record.py. Install into the venv with:
-#   uv pip install -r requirements.txt
+# Runtime dependencies for the trash-pickup pipeline (record + autonomous). Install with:
+#   uv pip install -r requirements.txt        (or: python pipeline/00_setup.py)
 # (dev/test also needs: pytest)
 
 lerobot[feetech]      # robot control + Feetech motor SDK + LeRobotDataset
@@ -8,5 +8,7 @@ depthai               # OAK-D-PRO (Luxonis) — scene camera over DepthAI
 pygrabber             # Windows DirectShow device names -> pick the wrist webcam, skip the laptop cam
 qualia-sdk            # cloud ACT/VLA finetuning (Qualia)
 python-dotenv         # load HF_TOKEN / QUALIA_TOKEN from .env
-pyyaml                # config.yaml (arm serials, camera sizes)
-opencv-python         # webcam capture (usually pulled in by lerobot too)
+pyyaml                # config.yaml (arm serials, camera sizes, workspace/IK/ROI)
+opencv-python         # webcam capture + homography (usually pulled in by lerobot too)
+transformers>=4.57.1,<5   # zero-shot perception (OWL-ViT). <5 keeps huggingface-hub <1.0
+                          # so it stays compatible with lerobot 0.4.4 (do NOT bump to 5.x)
