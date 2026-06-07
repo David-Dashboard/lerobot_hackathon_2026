@@ -6,12 +6,14 @@ then records manual ENTER-controlled episodes into an **ACT-ready LeRobotDataset
 It can push that dataset to the Hugging Face Hub and launch an **ACT finetune on
 Qualia** (cloud).
 
-Run with the project venv:
-    .\\.venv\\Scripts\\python.exe auto_record.py --check         # detect hardware only (no arm motion)
-    .\\.venv\\Scripts\\python.exe auto_record.py                 # record locally (manual episodes)
-    .\\.venv\\Scripts\\python.exe auto_record.py --push          # + push dataset to the HF Hub
-    .\\.venv\\Scripts\\python.exe auto_record.py --train         # + launch a Qualia ACT finetune (spends credits)
-    .\\.venv\\Scripts\\python.exe auto_record.py --install       # bootstrap missing deps via uv, then continue
+Actions combine; with no action flag the default is to record. Recording needs the
+arms+cameras; pushing and training do NOT (they act on an existing dataset).
+    .\\.venv\\Scripts\\python.exe auto_record.py --check            # detect hardware only (no arm motion)
+    .\\.venv\\Scripts\\python.exe auto_record.py                    # record locally (manual episodes)  [needs arms]
+    .\\.venv\\Scripts\\python.exe auto_record.py --record --push    # record, then push to the HF Hub   [needs arms]
+    .\\.venv\\Scripts\\python.exe auto_record.py --push             # push an EXISTING dataset to HF     [no arms]
+    .\\.venv\\Scripts\\python.exe auto_record.py --train            # push existing + launch Qualia ACT  [no arms]
+    .\\.venv\\Scripts\\python.exe auto_record.py --install          # bootstrap missing deps via uv, then continue
 
 Reliability: connect is retried (the usual loose-cable motor dropout), Ctrl+C
 finishes the current frame and saves the episode (second Ctrl+C aborts), and a
@@ -234,24 +236,22 @@ def launch_qualia_act(dataset_id: str, recorded_cams: list[str], args) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# upload-only (no recording, no hardware)
+# push existing dataset (no recording, no hardware)
 # --------------------------------------------------------------------------- #
-def upload_only(args) -> None:
-    """Push an EXISTING local dataset to the HF Hub (and optionally launch training)."""
-    from huggingface_hub import HfApi
+def _push_existing(args, hf_user: str):
+    """Push an EXISTING local dataset to the HF Hub. Returns (repo_id, camera_names).
+
+    No hardware involved -- this is how --push / --train work without the arms.
+    """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = Path(args.root) if args.root else REPO_ROOT / "recorded" / args.name
     if not root.exists() or not any(root.iterdir()):
-        sys.exit(f"ERROR: no local dataset at {root}. Record it first, or pass --name/--root.")
-
-    try:
-        hf_user = args.hf_user or HfApi().whoami()["name"]
-    except Exception as e:
-        sys.exit(f"ERROR: not logged in to Hugging Face ({e}). Set HF_TOKEN or pass --hf-user.")
+        sys.exit(f"ERROR: no local dataset at {root}. Record it first with --record, "
+                 "or pass --name/--root to point at an existing one.")
     repo_id = f"{hf_user}/{args.name}"
 
-    print("== Upload dataset to the HF Hub ==")
+    print("== Push dataset to the HF Hub ==")
     print(f"  local : {root}")
     print(f"  hub   : {repo_id}")
     ds = LeRobotDataset(repo_id=repo_id, root=str(root))
@@ -259,79 +259,26 @@ def upload_only(args) -> None:
     print(f"  {ds.num_episodes} episode(s), {ds.num_frames} frames, cameras: {img_keys}")
     ds.push_to_hub()
     print(f"Pushed: https://huggingface.co/datasets/{repo_id}")
-
-    if args.train:
-        cam_names = [k.rsplit(".", 1)[-1] for k in img_keys]
-        launch_qualia_act(repo_id, cam_names, args)
+    return repo_id, [k.rsplit(".", 1)[-1] for k in img_keys]
 
 
 # --------------------------------------------------------------------------- #
-# main
+# record (requires arms + cameras)
 # --------------------------------------------------------------------------- #
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true", help="detect hardware and exit (no recording, no arm motion)")
-    ap.add_argument("--install", action="store_true", help="install missing deps via uv, then continue")
-    ap.add_argument("--config", default=None, help="path to config.yaml (default: repo config.yaml)")
-    ap.add_argument("--name", default="trash_pick", help="dataset name")
-    ap.add_argument("--root", default=None, help="dataset directory (default: recorded/<name>)")
-    ap.add_argument("--task", default="pick up the trash and drop it in the bin")
-    ap.add_argument("--episodes", type=int, default=40, help="max demos (manual mode: quit early with 'q')")
-    ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--scene-size", default="640x480", help="OAK scene resolution WxH")
-    ap.add_argument("--wrist-size", default="640x480", help="wrist webcam resolution WxH")
-    ap.add_argument("--wrist-index", type=int, default=None, help="force the wrist webcam OpenCV index")
-    ap.add_argument("--no-wrist", action="store_true", help="record the OAK scene camera only")
-    ap.add_argument("--no-display", action="store_true", help="don't stream to Rerun")
-    ap.add_argument("--overwrite", action="store_true", help="replace an existing dataset of the same name")
-    # cloud
-    ap.add_argument("--upload-only", action="store_true", help="push an EXISTING local dataset (--name/--root) to the HF Hub and exit — no recording, no hardware")
-    ap.add_argument("--push", action="store_true", help="push the dataset to the HF Hub")
-    ap.add_argument("--train", action="store_true", help="push + launch a Qualia ACT finetune (spends credits)")
-    ap.add_argument("--hf-user", default=None, help="HF namespace for the dataset (auto-detected if omitted)")
-    ap.add_argument("--hours", type=float, default=2.0, help="Qualia finetune duration (hours)")
-    ap.add_argument("--yes-spend", action="store_true", help="skip the credit-spend confirmation prompt")
-    args = ap.parse_args()
-
-    os.chdir(REPO_ROOT)  # config.yaml / recorded/ paths + Qualia .env all resolve from here
-    # Put the venv's Scripts/bin dir on PATH so Rerun's viewer is found automatically.
-    os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
-
-    # Upload-only: push an existing dataset and exit (no hardware, no camera/serial deps).
-    if args.upload_only:
-        ensure_deps(args.install, need_record=False, need_hub=True)
-        upload_only(args)
-        return
-
-    push = args.push or args.train
-    ensure_deps(args.install, need_record=True,
-                need_rerun=not args.no_display and not args.check, need_hub=push)
-
-    import yaml
-
-    cfg_path = Path(args.config) if args.config else REPO_ROOT / "config.yaml"
-    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-
-    print("== Auto-detecting hardware ==")
-    ports, wrist_idx = detect(cfg, args)
-    if args.check:
-        print("\n--check: detection only, exiting (no recording).")
-        return
-
-    # Resolve dataset id / output dir.
-    hf_user = args.hf_user
-    if push and not hf_user:
-        from huggingface_hub import HfApi
-
-        hf_user = HfApi().whoami()["name"]
-    repo_id = f"{hf_user}/{args.name}" if push else f"local/{args.name}"
-    root = Path(args.root) if args.root else REPO_ROOT / "recorded" / args.name
-
+def _record(cfg, args, do_push: bool, hf_user: str | None):
+    """Auto-detect hardware, teleoperate, and record. Returns (repo_id, camera_names),
+    or (None, []) if no episode was recorded. Pushes to the Hub when do_push."""
     from coord_grasp.oak import OakCamera
     from so101 import make_arm, make_teleop
     from so101.discovery import Cv2Camera
     from so101.record import prepare_dataset_dir, record_teleop_dataset
     from so101.reliability import connect_with_retry, graceful_stop
+
+    print("== Auto-detecting hardware ==")
+    ports, wrist_idx = detect(cfg, args)
+
+    repo_id = f"{hf_user}/{args.name}" if do_push else f"local/{args.name}"
+    root = Path(args.root) if args.root else REPO_ROOT / "recorded" / args.name
 
     # Fail fast on a dataset name clash BEFORE connecting hardware.
     try:
@@ -388,7 +335,7 @@ def main() -> None:
                 cameras={}, extra_cameras=extra,
                 num_episodes=args.episodes, episode_steps=None,
                 fps=args.fps, root=str(root), overwrite=args.overwrite,
-                push_to_hub=push,
+                push_to_hub=do_push,
                 on_step=on_step, on_images=on_images,
                 progress=lambda d, t: print(f"\r  frame {d}", end="", flush=True),
                 should_stop=should_stop, await_start=await_start,
@@ -413,12 +360,90 @@ def main() -> None:
 
     if not summary or summary.get("num_episodes", 0) == 0:
         print("No episodes recorded — nothing to push or train.")
-        return
+        return None, []
     print(f"\nRecorded {summary['num_episodes']} episode(s), {summary['num_frames']} frames -> {summary['root']}")
-    if push:
+    if do_push:
         print(f"Pushed to the HF Hub: {repo_id}")
-    if args.train:
-        launch_qualia_act(repo_id, list(extra), args)
+    return repo_id, list(extra)
+
+
+# --------------------------------------------------------------------------- #
+# main
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--check", action="store_true", help="detect hardware and exit (no recording, no arm motion)")
+    ap.add_argument("--install", action="store_true", help="install missing deps via uv, then continue")
+    ap.add_argument("--config", default=None, help="path to config.yaml (default: repo config.yaml)")
+    ap.add_argument("--name", default="trash_pick", help="dataset name")
+    ap.add_argument("--root", default=None, help="dataset directory (default: recorded/<name>)")
+    ap.add_argument("--task", default="pick up the trash and drop it in the bin")
+    ap.add_argument("--episodes", type=int, default=40, help="max demos (manual mode: quit early with 'q')")
+    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--scene-size", default="640x480", help="OAK scene resolution WxH")
+    ap.add_argument("--wrist-size", default="640x480", help="wrist webcam resolution WxH")
+    ap.add_argument("--wrist-index", type=int, default=None, help="force the wrist webcam OpenCV index")
+    ap.add_argument("--no-wrist", action="store_true", help="record the OAK scene camera only")
+    ap.add_argument("--no-display", action="store_true", help="don't stream to Rerun")
+    ap.add_argument("--overwrite", action="store_true", help="replace an existing dataset of the same name")
+    # Actions (combine freely). With NO action flag, the default is to record.
+    ap.add_argument("--record", action="store_true", help="record new episodes (REQUIRES arms + cameras). Implied when no other action flag is given.")
+    ap.add_argument("--push", action="store_true", help="push the dataset (--name) to the HF Hub. NO arms needed.")
+    ap.add_argument("--train", action="store_true", help="launch a Qualia ACT finetune on the dataset (implies --push). NO arms needed; spends credits.")
+    ap.add_argument("--upload-only", action="store_true", help="alias for --push (push an existing dataset, no recording)")
+    ap.add_argument("--hf-user", default=None, help="HF namespace for the dataset (auto-detected if omitted)")
+    ap.add_argument("--hours", type=float, default=2.0, help="Qualia finetune duration (hours)")
+    ap.add_argument("--yes-spend", action="store_true", help="skip the credit-spend confirmation prompt")
+    args = ap.parse_args()
+
+    os.chdir(REPO_ROOT)  # config.yaml / recorded/ paths + Qualia .env all resolve from here
+    # Put the venv's Scripts/bin dir on PATH so Rerun's viewer is found automatically.
+    os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+
+    import yaml
+
+    cfg_path = Path(args.config) if args.config else REPO_ROOT / "config.yaml"
+
+    # --check: hardware detection only (needs the arms/cameras present; no recording).
+    if args.check:
+        ensure_deps(args.install, need_record=True, need_rerun=False)
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        print("== Auto-detecting hardware ==")
+        detect(cfg, args)
+        print("\n--check: detection only, exiting (no recording).")
+        return
+
+    # Actions can combine. Default (no action flag) = record locally.
+    #   --record           -> record new episodes (needs arms)
+    #   --push / --train    -> act on an EXISTING dataset (NO arms)
+    do_record = args.record or not (args.push or args.train or args.upload_only)
+    do_push = args.push or args.train or args.upload_only  # train needs the dataset on the Hub
+    do_train = args.train
+
+    ensure_deps(args.install, need_record=do_record,
+                need_rerun=do_record and not args.no_display, need_hub=do_push or do_train)
+
+    # Resolve the HF namespace only when we actually touch the Hub (no arms required).
+    hf_user = None
+    if do_push or do_train:
+        from huggingface_hub import HfApi
+
+        try:
+            hf_user = args.hf_user or HfApi().whoami()["name"]
+        except Exception as e:
+            sys.exit(f"ERROR: not logged in to Hugging Face ({e}). Set HF_TOKEN or pass --hf-user.")
+
+    if do_record:
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        repo_id, cam_names = _record(cfg, args, do_push, hf_user)
+        if repo_id is None:
+            return  # nothing recorded -> nothing to push or train
+    else:
+        # No arms: push an existing local dataset (the --push / --train path).
+        repo_id, cam_names = _push_existing(args, hf_user)
+
+    if do_train:
+        launch_qualia_act(repo_id, cam_names, args)
 
 
 if __name__ == "__main__":
