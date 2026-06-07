@@ -13,9 +13,14 @@ output is a policy you point 07_deploy.py at.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+# Robust HF uploads: skip Xet (stalls on flaky networks) -> mature LFS multipart.
+# Must be set before huggingface_hub is imported. Override with HF_HUB_DISABLE_XET=0.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
@@ -49,7 +54,7 @@ def main() -> None:
         repo_id = f"{_hf_user()}/{args.name}"
         ds = LeRobotDataset(repo_id=repo_id, root=str(root))
         img_keys = [k for k in ds.features if k.startswith("observation.images.")]
-        ds.push_to_hub()
+        ds.push_to_hub(upload_large_folder=True)  # resumable + per-file retries
         cam_map = {}
         pref = {"scene": "image_top", "wrist": "image_wrist"}
         slots = ["image_top", "image_wrist", "image_side"]
@@ -69,7 +74,7 @@ def main() -> None:
     if args.push:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-        LeRobotDataset(repo_id=repo_id, root=str(root)).push_to_hub()
+        LeRobotDataset(repo_id=repo_id, root=str(root)).push_to_hub(upload_large_folder=True)
 
     out = REPO / "outputs" / "train" / f"{args.name}_act"
     cmd = [

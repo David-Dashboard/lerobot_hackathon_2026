@@ -33,20 +33,23 @@ def _synthetic_frame(
     return img
 
 
-def build_teleop_features(cameras: dict) -> dict:
+def build_teleop_features(cameras: dict, use_videos: bool = True) -> dict:
     """Dataset schema for teleop recording: state, action, and one image per camera.
 
     `cameras` maps name -> ``{"width", "height", ...}``. Camera keys follow the
-    LeRobot convention: ``observation.images.<name>``.
+    LeRobot convention: ``observation.images.<name>``. With `use_videos` the camera
+    feature dtype is ``video`` (frames encoded to MP4 -> ~50-100x smaller datasets,
+    far faster/robuster HF uploads); otherwise ``image`` (one PNG per frame).
     """
     n = len(SO101_JOINTS)
     feats = {
         "observation.state": {"dtype": "float32", "shape": (n,), "names": list(SO101_JOINTS)},
         "action": {"dtype": "float32", "shape": (n,), "names": list(SO101_JOINTS)},
     }
+    cam_dtype = "video" if use_videos else "image"
     for name, spec in cameras.items():
         feats[f"observation.images.{name}"] = {
-            "dtype": "image",
+            "dtype": cam_dtype,
             "shape": (spec["height"], spec["width"], 3),
             "names": ["height", "width", "channels"],
         }
@@ -111,6 +114,7 @@ def record_teleop_dataset(
     root=None,
     overwrite: bool = False,
     push_to_hub: bool = False,
+    use_videos: bool = True,
     synthetic_frames: bool = False,
     on_step=None,
     on_images=None,
@@ -181,10 +185,10 @@ def record_teleop_dataset(
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         fps=fps,
-        features=build_teleop_features(feature_cams),
+        features=build_teleop_features(feature_cams, use_videos=use_videos),
         root=root,
         robot_type="so101_follower",
-        use_videos=False,
+        use_videos=use_videos,
     )
 
     period = 1.0 / fps
@@ -273,7 +277,9 @@ def record_teleop_dataset(
                     break
 
     if push_to_hub:
-        dataset.push_to_hub()
+        # upload_large_folder = resumable, per-file retries (survives flaky networks);
+        # far more robust than the default single-commit push.
+        dataset.push_to_hub(upload_large_folder=True)
 
     return {
         "repo_id": repo_id,

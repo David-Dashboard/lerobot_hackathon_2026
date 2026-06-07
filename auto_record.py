@@ -28,6 +28,11 @@ import importlib.util
 import os
 import subprocess
 import sys
+
+# Robust HF uploads: skip the Xet transport (it stalls on flaky/venue networks) so
+# pushes use mature LFS multipart. Must be set BEFORE huggingface_hub is imported.
+# Override with HF_HUB_DISABLE_XET=0 if you want Xet back on a good network.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -257,7 +262,7 @@ def _push_existing(args, hf_user: str):
     ds = LeRobotDataset(repo_id=repo_id, root=str(root))
     img_keys = [k for k in ds.features if k.startswith("observation.images.")]
     print(f"  {ds.num_episodes} episode(s), {ds.num_frames} frames, cameras: {img_keys}")
-    ds.push_to_hub()
+    ds.push_to_hub(upload_large_folder=True)  # resumable + per-file retries
     print(f"Pushed: https://huggingface.co/datasets/{repo_id}")
     return repo_id, [k.rsplit(".", 1)[-1] for k in img_keys]
 
