@@ -80,10 +80,10 @@ To share a calibration across machines, copy that folder (it's not in this repo)
 ## 6. Sanity check: read positions (no motion)
 
 ```bash
-python hello_read.py --port /dev/ttyACM0 --id my_follower
+python -c "from so101 import make_arm; a=make_arm(port='/dev/ttyACM0',arm_id='my_follower',calibrate=False); a.connect(); print(a.read_joints()); a.disconnect()"
 ```
-Move the arm by hand; Rerun should plot the joints live.
-(WSL2 on Windows 11 has WSLg, so the Rerun window opens on your Windows desktop.)
+Or, with the OAK + wrist cam attached, `python auto_record.py --check` verifies the
+whole setup (arms by serial + cameras) at once.
 
 ## 7. Teleop with Rerun
 
