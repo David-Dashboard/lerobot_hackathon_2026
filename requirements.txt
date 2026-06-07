@@ -1,21 +1,12 @@
-# Runtime dependencies. Install into the venv with:
+# Runtime dependencies for auto_record.py. Install into the venv with:
 #   uv pip install -r requirements.txt
 # (dev/test also needs: pytest)
 
-lerobot[feetech]      # robot control + Feetech motor SDK
-rerun-sdk             # visualization
-fastapi               # remote-control HTTP server + dashboard
-uvicorn[standard]     # ASGI server to run it
-httpx                 # client (and FastAPI TestClient)
-qualia-sdk            # VLA finetuning (Qualia)
-python-dotenv         # load tokens from .env
-
-# trash-arm pipeline
-transformers>=4.57.1,<5   # open-vocab perception (OWL-ViT). <5 keeps huggingface-hub
-                          # <1.0 so it stays compatible with lerobot 0.4.4 (do NOT bump to 5.x)
-pyyaml                # config.yaml
-opencv-python         # camera + homography (usually pulled in by lerobot too)
-
-# auto-recording (auto_record.py)
+lerobot[feetech]      # robot control + Feetech motor SDK + LeRobotDataset
+rerun-sdk             # live visualization (--display)
 depthai               # OAK-D-PRO (Luxonis) — scene camera over DepthAI
-pygrabber             # Windows DirectShow device names -> reliably pick the wrist webcam, skip the laptop cam
+pygrabber             # Windows DirectShow device names -> pick the wrist webcam, skip the laptop cam
+qualia-sdk            # cloud ACT/VLA finetuning (Qualia)
+python-dotenv         # load HF_TOKEN / QUALIA_TOKEN from .env
+pyyaml                # config.yaml (arm serials, camera sizes)
+opencv-python         # webcam capture (usually pulled in by lerobot too)

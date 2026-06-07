@@ -18,7 +18,7 @@ def make_arm(
     mock=False -> SO101Arm on `port` (requires LeRobot + a wired arm)
 
     `cameras` (real arm only) maps a name to ``{"index", "width", "height", "fps"}``
-    so the follower also streams frames -- see `record.parse_camera_spec`.
+    so the follower also streams those OpenCV cameras in its observation.
     """
     if mock:
         from .mock import MockArm

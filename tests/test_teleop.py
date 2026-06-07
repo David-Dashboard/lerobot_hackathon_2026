@@ -4,11 +4,7 @@ import numpy as np
 import pytest
 
 from so101 import MockArm, MockTeleop, SO101_JOINTS, Teleoperator, make_teleop
-from so101.record import (
-    build_teleop_features,
-    parse_camera_spec,
-    record_teleop_dataset,
-)
+from so101.record import build_teleop_features, record_teleop_dataset
 
 
 def test_mock_teleop_satisfies_interface():
@@ -43,24 +39,6 @@ def test_leader_action_differs_from_follower_state():
     arm.connect()
     leader.connect()
     assert arm.read_joints() != leader.read_action()
-
-
-def test_parse_camera_spec_variants():
-    name, cfg = parse_camera_spec("scene=0")
-    assert name == "scene"
-    assert cfg == {"index": 0, "width": 640, "height": 480, "fps": 30}
-
-    _, cfg = parse_camera_spec("wrist=2:1280x720@15")
-    assert cfg == {"index": 2, "width": 1280, "height": 720, "fps": 15}
-
-    # Non-integer index (e.g. a device path) stays a string.
-    _, cfg = parse_camera_spec("usb=/dev/video0")
-    assert cfg["index"] == "/dev/video0"
-
-
-def test_parse_camera_spec_rejects_bad_input():
-    with pytest.raises(ValueError):
-        parse_camera_spec("noequalssign")
 
 
 def test_build_teleop_features_has_one_image_per_camera():

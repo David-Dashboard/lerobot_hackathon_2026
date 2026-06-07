@@ -36,14 +36,14 @@ Write them down, e.g.:  follower = COM3 , leader = COM5
 
 ---
 
-## 2. Hello world #1 — READ ONLY (no motion)
+## 2. Sanity check — READ ONLY (no motion)
 
-Proves comms without moving anything. Move the arm BY HAND and watch the
-Rerun plots react.
+Proves comms without moving anything (swap port/id for the leader to test it too):
 ```powershell
-.\.venv\Scripts\python.exe hello_read.py --port COM3 --id my_follower
+.\.venv\Scripts\python.exe -c "from so101 import make_arm; a=make_arm(port='COM3',arm_id='my_follower',calibrate=False); a.connect(); print(a.read_joints()); a.disconnect()"
 ```
-Ctrl+C to stop. (Swap the port for the leader to test that one too.)
+Once calibrated with the OAK + wrist cam connected, `python auto_record.py --check`
+verifies the whole setup (arms by serial + both cameras) at once.
 
 ---
 

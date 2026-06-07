@@ -1,8 +1,8 @@
-"""Record a LeRobotDataset from any `RobotArm` -- mock or real.
+"""Record a teleoperation LeRobotDataset (leader -> follower) with camera frames.
 
-For the mock, we synthesize a deterministic camera frame from the joint state so
-the resulting dataset is a valid *vision* dataset (trainable by a VLA), with no
-hardware. Stored as images (use_videos=False) so it needs no ffmpeg.
+`record_teleop_dataset` mirrors the leader onto the follower and logs state +
+action + every camera into a LeRobotDataset (the format ACT trains on). Mock runs
+can synthesize a deterministic frame so the pipeline is testable with no hardware.
 """
 
 from __future__ import annotations
@@ -15,8 +15,7 @@ from .interface import RobotArm
 from .obs import SO101_JOINTS, observation_to_joints
 from .teleop import Teleoperator
 
-CAM_H, CAM_W = 120, 160
-CAMERA_KEY = "observation.images.front"
+CAM_H, CAM_W = 120, 160  # default synthetic-frame size (mock fallback)
 
 
 def _synthetic_frame(
@@ -34,123 +33,11 @@ def _synthetic_frame(
     return img
 
 
-def parse_camera_spec(spec: str) -> tuple[str, dict]:
-    """Parse a CLI camera spec ``name=index[:WxH][@fps]`` into ``(name, config)``.
-
-    Examples::
-
-        "front=0"             -> ("front", {"index": 0, "width": 640, "height": 480, "fps": 30})
-        "wrist=2:1280x720@15" -> ("wrist", {"index": 2, "width": 1280, "height": 720, "fps": 15})
-
-    ``index`` stays a string if it isn't an integer (so device paths work too).
-    """
-    if "=" not in spec:
-        raise ValueError(f"camera spec must be name=index[:WxH][@fps], got {spec!r}")
-    name, rest = spec.split("=", 1)
-    name = name.strip()
-    if not name:
-        raise ValueError(f"camera spec has empty name: {spec!r}")
-
-    fps = 30
-    if "@" in rest:
-        rest, fps_str = rest.split("@", 1)
-        fps = int(fps_str)
-
-    width, height = 640, 480
-    if ":" in rest:
-        index_str, res = rest.split(":", 1)
-        if "x" not in res:
-            raise ValueError(f"resolution must be WxH, got {res!r} in {spec!r}")
-        w_str, h_str = res.lower().split("x", 1)
-        width, height = int(w_str), int(h_str)
-    else:
-        index_str = rest
-
-    index_str = index_str.strip()
-    index: int | str = int(index_str) if index_str.lstrip("-").isdigit() else index_str
-    return name, {"index": index, "width": width, "height": height, "fps": fps}
-
-
-def build_features(with_camera: bool = True) -> dict:
-    n = len(SO101_JOINTS)
-    feats = {
-        "observation.state": {"dtype": "float32", "shape": (n,), "names": list(SO101_JOINTS)},
-        "action": {"dtype": "float32", "shape": (n,), "names": list(SO101_JOINTS)},
-    }
-    if with_camera:
-        feats[CAMERA_KEY] = {
-            "dtype": "image",
-            "shape": (CAM_H, CAM_W, 3),
-            "names": ["height", "width", "channels"],
-        }
-    return feats
-
-
-def record_dataset(
-    arm: RobotArm,
-    repo_id: str,
-    task: str,
-    *,
-    num_episodes: int = 2,
-    episode_steps: int = 20,
-    fps: int = 30,
-    root=None,
-    with_camera: bool = True,
-    push_to_hub: bool = False,
-    progress=None,
-) -> dict:
-    """Record `num_episodes` of mock/real teleop into a LeRobotDataset.
-
-    `progress(done_frames, total_frames)` is called as it runs (for the UI).
-    Returns a summary dict.
-    """
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-    if not arm.is_connected:
-        arm.connect()
-
-    dataset = LeRobotDataset.create(
-        repo_id=repo_id,
-        fps=fps,
-        features=build_features(with_camera),
-        root=root,
-        robot_type="so101_follower",
-        use_videos=False,
-    )
-
-    total = num_episodes * episode_steps
-    done = 0
-    for _ in range(num_episodes):
-        for _ in range(episode_steps):
-            joints = arm.read_joints()
-            state = np.array([joints[j] for j in SO101_JOINTS], dtype=np.float32)
-            frame = {"observation.state": state, "action": state.copy(), "task": task}
-            if with_camera:
-                frame[CAMERA_KEY] = _synthetic_frame(joints)
-            dataset.add_frame(frame)
-            done += 1
-            if progress:
-                progress(done, total)
-        dataset.save_episode()
-
-    if push_to_hub:
-        dataset.push_to_hub()
-
-    return {
-        "repo_id": repo_id,
-        "num_episodes": num_episodes,
-        "num_frames": total,
-        "root": str(dataset.root),
-        "pushed": push_to_hub,
-    }
-
-
 def build_teleop_features(cameras: dict) -> dict:
     """Dataset schema for teleop recording: state, action, and one image per camera.
 
-    `cameras` maps name -> ``{"width", "height", ...}`` (the dict from
-    `parse_camera_spec`). Camera keys follow LeRobot convention:
-    ``observation.images.<name>``.
+    `cameras` maps name -> ``{"width", "height", ...}``. Camera keys follow the
+    LeRobot convention: ``observation.images.<name>``.
     """
     n = len(SO101_JOINTS)
     feats = {
