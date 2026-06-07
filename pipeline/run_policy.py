@@ -115,23 +115,23 @@ def main() -> None:
     from coord_grasp.oak import OakCamera
     from lerobot.utils.control_utils import predict_action
     from so101 import SO101_JOINTS, make_arm
-    from so101.discovery import Cv2Camera, find_arm_ports, find_wrist_camera, oak_present
+    from so101.discovery import Cv2Camera, find_wrist_camera, oak_present
     from so101.reliability import connect_with_retry, graceful_stop
 
     print(f"Loading policy {args.policy} (CPU) ...")
     policy, pre, post, device = _load_policy(args.policy)
     print("policy + processors ready.")
 
-    # --- detect hardware (by serial / name) ---
-    ports = find_arm_ports({"follower": cfg["robot"]["serial"]})
+    # --- detect hardware (port-agnostic: serial match, else the sole SO-101 port) ---
+    follower_port = _detect_follower_port(cfg)
     if not oak_present():
         sys.exit("OAK-D-PRO (scene cam) not detected. Plug it into USB3 and retry.")
     wrist_idx = find_wrist_camera()
     if wrist_idx is None:
         sys.exit("Wrist webcam not found (the model needs observation.images.wrist).")
-    print(f"follower={ports['follower']}  scene=OAK  wrist=index {wrist_idx}")
+    print(f"follower={follower_port}  scene=OAK  wrist=index {wrist_idx}")
 
-    follower = make_arm(port=ports["follower"], arm_id=cfg["robot"]["id"], calibrate=False)
+    follower = make_arm(port=follower_port, arm_id=cfg["robot"]["id"], calibrate=False)
     scene = OakCamera(size=(640, 480))
     wrist = Cv2Camera(wrist_idx, width=640, height=480, fps=args.fps)
 
