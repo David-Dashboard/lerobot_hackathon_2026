@@ -147,6 +147,35 @@ shown; for WSL2 run `bash setup_wsl2.sh` first and swap `COM5`→`/dev/ttyACM0` 
 > In PowerShell, run multi-line commands as **one line** — a dropped backtick
 > (`` ` ``) silently truncates the command into defaults.
 
+### ⭐ Recommended: one command — `auto_record.py`
+
+`auto_record.py` auto-detects the arms (by board serial), the OAK-D-PRO (scene cam)
+and the wrist webcam (laptop excluded), records manual ENTER-controlled episodes into
+an ACT-ready dataset, and can push to HF + launch a Qualia **ACT** finetune. It also
+auto-fixes the Rerun PATH, retries flaky connects, and fails fast on name clashes.
+
+```powershell
+.\.venv\Scripts\python.exe auto_record.py --check               # detect hardware only (no motion)
+.\.venv\Scripts\python.exe auto_record.py                       # record episodes          [needs arms]
+.\.venv\Scripts\python.exe auto_record.py --record --push       # record, then push to HF  [needs arms]
+.\.venv\Scripts\python.exe auto_record.py --push  --name batch1 # push an existing dataset to HF   [no arms]
+.\.venv\Scripts\python.exe auto_record.py --train --name batch1 # push existing + Qualia ACT job   [no arms]
+.\.venv\Scripts\python.exe auto_record.py --install             # uv-bootstrap missing deps, then run
+```
+
+| Action | Needs arms? | What it does |
+|---|---|---|
+| *(none)* or `--record` | **yes** | record demos — ENTER to start/stop each episode, `q` to finish |
+| `--record --push` | **yes** | record, then push the dataset to the HF Hub |
+| `--push` | **no** | push an existing `--name` dataset to `<hf_user>/<name>` |
+| `--train` | **no** | push existing + launch a Qualia ACT finetune (confirms before spending credits) |
+| `--check` | reads only | print the detected arms / OAK / wrist and exit |
+
+Common options: `--name`, `--episodes`, `--scene-size WxH`, `--no-wrist`, `--no-display`, `--overwrite`, `--hours`, `--yes-spend`, `--hf-user`.
+
+The numbered steps below are the **manual/advanced** path (explicit ports,
+`lerobot-teleoperate`, `record_teleop.py`) if you'd rather drive each stage yourself.
+
 ### 0. Environment
 ```powershell
 uv venv --python 3.11
@@ -221,11 +250,18 @@ lerobot-teleoperate `
 ```
 
 ### 7. Train
-Local ACT (free, CPU-capable):
+**Cloud ACT on Qualia (no arms needed)** — push the dataset to HF and launch the finetune in one step:
+```powershell
+.\.venv\Scripts\python.exe auto_record.py --train --name demos        # push + launch (confirms before spending credits)
+.\.venv\Scripts\python.exe auto_record.py --push  --name demos        # just push to HF (no training)
+```
+(`--train`/`--push` operate on an existing local dataset — no arms/cameras required. Needs `QUALIA_TOKEN` + `HF_TOKEN` in `.env`.)
+
+**Local ACT** (free, CPU-capable):
 ```powershell
 .\.venv\Scripts\lerobot-train.exe --dataset.repo_id=local/demos --dataset.root=recorded/demos --policy.type=act --policy.device=cpu --output_dir=outputs/train/demos_act --job_name=demos_act --batch_size=4 --num_workers=0 --steps=100000 --save_freq=200 --wandb.enable=false
 ```
-Qualia VLA finetune (cloud; needs `QUALIA_TOKEN` + dataset on the HF Hub) — use the dashboard (`serve.py`) or `so101.qualia_client.launch_finetune`.
+You can also launch finetunes from the dashboard (`serve.py`) or `so101.qualia_client.launch_finetune`.
 
 ### 8. Scripted trash-collecting pipeline (perceive → localize → pick)
 ```powershell
