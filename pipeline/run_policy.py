@@ -17,6 +17,8 @@ Needs the follower arm + OAK + wrist webcam free (close any process holding them
 from __future__ import annotations
 
 import argparse
+import datetime
+import logging
 import sys
 import time
 from pathlib import Path
@@ -27,6 +29,13 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 DEFAULT_POLICY = "qualia-robotics/act-batch1-9b99bbf0"
+
+log = logging.getLogger("run_policy")
+
+
+def _vec(a) -> str:
+    """Compact fixed-width vector for logs, e.g. [ +12.3  -45.6 ...]."""
+    return "[" + " ".join(f"{float(x):+7.1f}" for x in a) + "]"
 
 
 def clamp_action(target, current, joint_names, limits, max_step_deg):
@@ -99,11 +108,23 @@ def main() -> None:
     args = ap.parse_args()
 
     move = args.go and not args.dry_run
-    if not args.go and not args.dry_run:
-        print("No mode given -> defaulting to --dry-run (no motion). Use --go to move the arm.")
     import os
     os.chdir(REPO)
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+
+    # --- logging: console (INFO) + a detailed per-step file (DEBUG) under logs/ ---
+    logdir = REPO / "logs"
+    logdir.mkdir(exist_ok=True)
+    logpath = logdir / f"run_policy_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+    log.setLevel(logging.DEBUG)
+    log.handlers.clear()
+    _fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S")
+    _fh = logging.FileHandler(logpath, encoding="utf-8"); _fh.setLevel(logging.DEBUG); _fh.setFormatter(_fmt)
+    _ch = logging.StreamHandler(); _ch.setLevel(logging.INFO); _ch.setFormatter(_fmt)
+    log.addHandler(_fh); log.addHandler(_ch)
+    log.info("=== run_policy debug log -> %s ===", logpath)
+    if not args.go and not args.dry_run:
+        log.warning("No mode flag -> DRY-RUN (no motion). Pass --go to actually move the arm.")
 
     from dotenv import load_dotenv
     load_dotenv(str(REPO / ".env"))
@@ -118,9 +139,13 @@ def main() -> None:
     from so101.discovery import Cv2Camera, find_wrist_camera, oak_present
     from so101.reliability import connect_with_retry, graceful_stop
 
-    print(f"Loading policy {args.policy} (CPU) ...")
+    log.info("Loading policy %s (CPU) ...", args.policy)
     policy, pre, post, device = _load_policy(args.policy)
-    print("policy + processors ready.")
+    pc = policy.config
+    log.info("policy ready | inputs=%s", list(getattr(pc, "input_features", {})))
+    log.info("  n_obs_steps=%s chunk_size=%s n_action_steps=%s",
+             getattr(pc, "n_obs_steps", "?"), getattr(pc, "chunk_size", "?"),
+             getattr(pc, "n_action_steps", "?"))
 
     # --- detect hardware (port-agnostic: serial match, else the sole SO-101 port) ---
     follower_port = _detect_follower_port(cfg)
@@ -129,54 +154,78 @@ def main() -> None:
     wrist_idx = find_wrist_camera()
     if wrist_idx is None:
         sys.exit("Wrist webcam not found (the model needs observation.images.wrist).")
-    print(f"follower={follower_port}  scene=OAK  wrist=index {wrist_idx}")
+    log.info("follower=%s  scene=OAK  wrist=index %s", follower_port, wrist_idx)
 
     follower = make_arm(port=follower_port, arm_id=cfg["robot"]["id"], calibrate=False)
     scene = OakCamera(size=(640, 480))
     wrist = Cv2Camera(wrist_idx, width=640, height=480, fps=args.fps)
 
     mode = "MOVE (real)" if move else "DRY-RUN (no motion)"
-    print(f"\n== Deploying ACT — {mode} @ {args.fps} fps, max {args.max_step_deg}°/tick ==")
+    log.info("== Deploying ACT -- %s @ %d fps, max %.1f deg/tick ==", mode, args.fps, args.max_step_deg)
     if move:
-        print("The arm WILL move. Keep clear; Ctrl+C = e-stop (torque off).")
+        log.warning("The arm WILL move. Keep clear; Ctrl+C = e-stop (torque off).")
 
     period = 1.0 / args.fps
     n = 0
     try:
-        connect_with_retry(follower, "follower")
-        connect_with_retry(scene, "scene(OAK)")
-        connect_with_retry(wrist, "wrist")
+        connect_with_retry(follower, "follower"); log.info("follower connected")
+        connect_with_retry(scene, "scene(OAK)"); log.info("scene (OAK) connected")
+        connect_with_retry(wrist, "wrist"); log.info("wrist connected")
+        prev_raw = None
+        static_steps = 0
         with graceful_stop() as should_stop:
             while not should_stop():
                 t0 = time.perf_counter()
                 state = follower.read_joints()
+                state_arr = np.array([state[j] for j in SO101_JOINTS], dtype=np.float32)
+                scene_img = np.asarray(scene.read())
+                wrist_img = np.asarray(wrist.read())
                 obs = {
-                    "observation.state": np.array([state[j] for j in SO101_JOINTS], dtype=np.float32),
-                    "observation.images.scene": np.asarray(scene.read()),
-                    "observation.images.wrist": np.asarray(wrist.read()),
+                    "observation.state": state_arr,
+                    "observation.images.scene": scene_img,
+                    "observation.images.wrist": wrist_img,
                 }
-                action = np.asarray(
+                raw = np.asarray(
                     predict_action(obs, policy, device, pre, post, use_amp=False,
                                    task=args.task, robot_type="so101_follower")
                 ).flatten()
-                cmd = clamp_action(action, state, SO101_JOINTS, limits, args.max_step_deg)
+                cmd = clamp_action(raw, state, SO101_JOINTS, limits, args.max_step_deg)
+                cmd_arr = np.array([cmd[j] for j in SO101_JOINTS], dtype=np.float32)
+                delta = float(np.abs(cmd_arr - state_arr).max())
+                n += 1
+
+                # --- per-step detail (file) -- the key signals for "model did nothing" ---
+                log.debug("step %d", n)
+                log.debug("  img scene shape=%s min=%d max=%d mean=%.1f | wrist shape=%s min=%d max=%d mean=%.1f",
+                          tuple(scene_img.shape), scene_img.min(), scene_img.max(), scene_img.mean(),
+                          tuple(wrist_img.shape), wrist_img.min(), wrist_img.max(), wrist_img.mean())
+                log.debug("  state = %s", _vec(state_arr))
+                log.debug("  raw   = %s", _vec(raw))
+                log.debug("  cmd   = %s  (max move vs state = %.2f deg)", _vec(cmd_arr), delta)
+
+                # frozen-output detector = the literal "model did nothing" signal
+                if prev_raw is not None:
+                    static_steps = static_steps + 1 if float(np.abs(raw - prev_raw).max()) < 0.05 else 0
+                    if static_steps == 30:
+                        log.warning("model output ~STATIC for 30 steps (change <0.05 deg) -- likely "
+                                    "UNDERTRAINED or a frozen/blank observation (check img stats above).")
+                prev_raw = raw
+
                 if move:
                     follower.write_joints(cmd)
-                    tag = "->"
-                else:
-                    tag = "[dry]"
-                n += 1
-                if n % args.fps == 0 or not move:
-                    print(f"  {tag} " + " ".join(f"{j}={cmd[j]:6.1f}" for j in SO101_JOINTS))
+                    if delta < 0.1:
+                        log.debug("  (commanded ~no motion this tick: max move <0.1 deg)")
+                if (not move) or n % args.fps == 0:
+                    log.info("%s step %d  cmd=%s  maxmove=%.1f deg", "->" if move else "[dry]", n, _vec(cmd_arr), delta)
                 if args.max_steps and n >= args.max_steps:
                     break
                 dt = time.perf_counter() - t0
                 if dt < period:
                     time.sleep(period - dt)
     except KeyboardInterrupt:
-        print("\nstopped.")
-    except Exception as e:
-        print(f"\nstopped: {type(e).__name__}: {e}")
+        log.info("stopped (Ctrl+C).")
+    except Exception:
+        log.exception("stopped on error:")  # full traceback -> log file
     finally:
         try:
             follower.disconnect()  # disable_torque_on_disconnect=True -> arm goes limp
@@ -187,7 +236,7 @@ def main() -> None:
                 cam.close()
             except Exception:
                 pass
-        print(f"Disconnected. ({n} steps)")
+        log.info("Disconnected. (%d steps)  full log: %s", n, logpath)
 
 
 if __name__ == "__main__":
